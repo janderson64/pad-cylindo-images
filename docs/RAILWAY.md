@@ -10,12 +10,31 @@ Repo: https://github.com/janderson64/pad-cylindo-images
 2. **Deploy from GitHub repo** → select `janderson64/pad-cylindo-images`
 3. Railway detects `railway.toml` and builds from the `Dockerfile`
 
-## 2. Add PostgreSQL
+## 2. Add PostgreSQL (required before the app will start)
 
-1. In the project, click **+ New** → **Database** → **PostgreSQL**
-2. Open the web service → **Variables** → **Add reference** → select `DATABASE_URL` from the Postgres service
+The app crashes on boot with `P1012: Environment variable not found: DATABASE_URL` until Postgres is linked to the **web service**.
 
-Railway injects `DATABASE_URL` automatically when referenced.
+### Option A — Connect (easiest)
+
+1. In the project canvas, click **+ New** → **Database** → **PostgreSQL**
+2. Wait for Postgres to finish provisioning
+3. Click the **Postgres** service → **Connect** (or **Data** → **Connect**)
+4. Select your **web service** (the GitHub repo service)
+5. Railway adds `DATABASE_URL` to the web service automatically
+
+### Option B — Variable reference
+
+1. Add Postgres as above
+2. Click your **web service** (not Postgres) → **Variables**
+3. **New Variable** → **Add Reference** → Postgres → **`DATABASE_URL`**
+
+### Option C — Copy/paste (if reference UI fails)
+
+1. Open **Postgres** → **Variables** → copy the **`DATABASE_URL`** value
+2. Open **web service** → **Variables** → **New Variable**
+3. Name: `DATABASE_URL`, paste the copied value, save
+
+Verify: on the **web service** Variables tab you must see `DATABASE_URL` listed. If it only exists on Postgres, the app will not see it.
 
 ## 3. Set environment variables
 
@@ -23,7 +42,7 @@ On the **web service** (not the database), add:
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | Reference from Postgres service |
+| `DATABASE_URL` | **Reference** from Postgres (step 2) — required |
 | `SHOPIFY_API_KEY` | `21128d690914e4ca94bb1ded5b4442fa` |
 | `SHOPIFY_API_SECRET` | From `shopify app env show` (mark as secret) |
 | `SCOPES` | `read_products,write_products` |
@@ -97,6 +116,7 @@ railway up
 
 | Issue | Fix |
 |---|---|
+| `P1012: Environment variable not found: DATABASE_URL` | Add Postgres (step 2), **Add Reference** `DATABASE_URL` on the **web service**, then redeploy. Variables on Postgres alone are not enough. |
 | App blank in Admin | `SHOPIFY_APP_URL` must match `application_url` in `shopify.app.production.toml` after `shopify app deploy` |
 | Database errors on boot | Confirm Postgres is linked and `npm run setup` (migrations) ran — check deploy logs |
 | OAuth redirect errors | Redeploy Shopify config after changing Railway domain; include `/auth/callback` redirect URLs |
