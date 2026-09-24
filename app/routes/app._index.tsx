@@ -83,14 +83,8 @@ function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
-function truncateSkuInput(skuInput: string, maxLength = 80): string {
-  const normalized = skuInput.replace(/\s+/g, " ").trim();
-
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, maxLength - 1)}…`;
+function formatSkuInput(skuInput: string): string {
+  return skuInput.replace(/\s+/g, " ").trim();
 }
 
 function buildLogRows(summary: SyncSummary) {
@@ -350,7 +344,7 @@ export default function Index() {
                   String(job.skippedHasImageCount),
                   String(job.skippedMissingMetafieldsCount),
                   String(job.failedCount),
-                  truncateSkuInput(job.skuInput),
+                  formatSkuInput(job.skuInput),
                 ])}
               />
             ) : (
