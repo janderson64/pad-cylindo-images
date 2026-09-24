@@ -261,7 +261,7 @@ export default function Index() {
 
   useEffect(() => {
     void runAction("ping");
-  }, []);
+  }, [runAction]);
 
   const summary =
     actionData && (actionData.ok || actionData.summary) ? actionData.summary : null;
