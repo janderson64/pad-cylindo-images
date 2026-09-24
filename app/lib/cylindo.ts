@@ -125,14 +125,20 @@ export function buildCylindoFrameUrlForVariant(
 }
 
 export async function validateCylindoImageUrl(url: string): Promise<boolean> {
-  const response = await fetch(url, { method: "HEAD" });
+  const response = await fetch(url, {
+    method: "HEAD",
+    signal: AbortSignal.timeout(15_000),
+  });
 
   if (response.ok) {
     return true;
   }
 
   if (response.status === 405 || response.status === 403) {
-    const getResponse = await fetch(url, { method: "GET" });
+    const getResponse = await fetch(url, {
+      method: "GET",
+      signal: AbortSignal.timeout(15_000),
+    });
     return getResponse.ok;
   }
 

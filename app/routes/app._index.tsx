@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData } from "@remix-run/react";
+import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
+import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -14,6 +14,7 @@ import {
   DataTable,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
+import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
 import { syncCylindoVariantImages, type SyncSummary } from "../lib/sync-variant-images.server";
@@ -54,9 +55,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  const summary = await syncCylindoVariantImages(admin);
+  try {
+    const summary = await syncCylindoVariantImages(admin);
+    return { ok: true as const, summary };
+  } catch (error) {
+    console.error("Cylindo sync failed:", error);
 
-  return { ok: true as const, summary };
+    if (error instanceof Response) {
+      const body = await error.text().catch(() => "");
+      return {
+        ok: false as const,
+        error: `Shopify API error (${error.status}): ${body || error.statusText}`,
+      };
+    }
+
+    return {
+      ok: false as const,
+      error: error instanceof Error ? error.message : "Unexpected sync error",
+    };
+  }
+};
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}
+
+export const headers: HeadersFunction = (headersArgs) => {
+  return boundary.headers(headersArgs);
 };
 
 type ActionData =
@@ -97,7 +122,22 @@ export default function Index() {
     ["loading", "submitting"].includes(fetcher.state) &&
     fetcher.formMethod === "POST";
 
-  const runSync = () => fetcher.submit({}, { method: "POST" });
+  const runSync = async () => {
+    const params = new URLSearchParams(window.location.search);
+
+    try {
+      const token = await shopify.idToken();
+      params.set("id_token", token);
+    } catch (error) {
+      shopify.toast.show(
+        error instanceof Error ? error.message : "Could not get session token",
+        { isError: true },
+      );
+      return;
+    }
+
+    fetcher.submit({}, { method: "POST", action: `/app?${params.toString()}` });
+  };
 
   useEffect(() => {
     if (fetcher.data?.ok) {
@@ -114,7 +154,7 @@ export default function Index() {
   return (
     <Page>
       <TitleBar title="Cylindo Variant Images">
-        <button variant="primary" onClick={runSync} disabled={isLoading}>
+        <button variant="primary" onClick={() => void runSync()} disabled={isLoading || Boolean(configError)}>
           Sync Cylindo variant images
         </button>
       </TitleBar>
@@ -138,7 +178,12 @@ export default function Index() {
                   </Banner>
                 )}
                 <InlineStack gap="300">
-                  <Button variant="primary" loading={isLoading} onClick={runSync}>
+                  <Button
+                    variant="primary"
+                    loading={isLoading}
+                    onClick={runSync}
+                    disabled={Boolean(configError)}
+                  >
                     Sync Cylindo variant images
                   </Button>
                 </InlineStack>

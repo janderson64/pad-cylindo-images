@@ -4,7 +4,7 @@
 
 client_id = "21128d690914e4ca94bb1ded5b4442fa"
 name = "cylindo-image-update"
-application_url = "https://REPLACE-WITH-YOUR-APP.up.railway.app"
+application_url = "https://pad-cylindo-images-production.up.railway.app"
 embedded = true
 
 [build]
@@ -26,7 +26,7 @@ scopes = "read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://REPLACE-WITH-YOUR-APP.up.railway.app/auth/callback",
-  "https://REPLACE-WITH-YOUR-APP.up.railway.app/auth/shopify/callback",
-  "https://REPLACE-WITH-YOUR-APP.up.railway.app/api/auth/callback",
+  "https://pad-cylindo-images-production.up.railway.app/auth/callback",
+  "https://pad-cylindo-images-production.up.railway.app/auth/shopify/callback",
+  "https://pad-cylindo-images-production.up.railway.app/api/auth/callback",
 ]
