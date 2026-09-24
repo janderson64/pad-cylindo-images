@@ -1,9 +1,5 @@
 import { useCallback, useEffect } from "react";
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "@remix-run/node";
+import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import {
   useFetcher,
@@ -27,11 +23,7 @@ import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
-import {
-  syncCylindoVariantImages,
-  truncateSyncSummaryForClient,
-  type SyncSummary,
-} from "../lib/sync-variant-images.server";
+import type { SyncSummary } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
 
 type ActionData =
@@ -58,60 +50,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   return json({ configSummary, configError });
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
-  let admin;
-
-  try {
-    ({ admin } = await authenticate.admin(request));
-  } catch (error) {
-    console.error("Sync action authentication failed:", error);
-    throw error;
-  }
-
-  try {
-    getCylindoConfig();
-  } catch (error) {
-    return json({
-      ok: false as const,
-      error:
-        error instanceof Error ? error.message : "Missing Cylindo configuration",
-    });
-  }
-
-  try {
-    const summary = truncateSyncSummaryForClient(
-      await syncCylindoVariantImages(admin),
-    );
-
-    if (summary.timedOut) {
-      return json({
-        ok: false as const,
-        error:
-          summary.statusMessage ??
-          "Sync stopped early to avoid a request timeout. Run sync again to continue.",
-        summary,
-      });
-    }
-
-    return json({ ok: true as const, summary });
-  } catch (error) {
-    console.error("Cylindo sync failed:", error);
-
-    if (error instanceof Response) {
-      const body = await error.text().catch(() => "");
-      return json({
-        ok: false as const,
-        error: `Shopify API error (${error.status}): ${body || error.statusText}`,
-      });
-    }
-
-    return json({
-      ok: false as const,
-      error: error instanceof Error ? error.message : "Unexpected sync error",
-    });
-  }
 };
 
 export function shouldRevalidate({
@@ -178,7 +116,7 @@ export default function Index() {
       return;
     }
 
-    fetcher.submit({}, { method: "POST", action: `/app?${params.toString()}` });
+    fetcher.submit({}, { method: "POST", action: `/app/sync?${params.toString()}` });
   }, [fetcher, shopify]);
 
   useEffect(() => {
