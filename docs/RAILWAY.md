@@ -46,7 +46,7 @@ On the **web service** (not the database), add:
 | `SHOPIFY_API_KEY` | `21128d690914e4ca94bb1ded5b4442fa` |
 | `SHOPIFY_API_SECRET` | From `shopify app env show` (mark as secret) |
 | `SCOPES` | `read_products,write_products` |
-| `SHOPIFY_APP_URL` | Set after first deploy (step 4) |
+| `SHOPIFY_APP_URL` | Your Railway public URL (`https://....up.railway.app`). Optional if you generated a Railway domain — the app falls back to `RAILWAY_PUBLIC_DOMAIN`. |
 | `SHOP_CUSTOM_DOMAIN` | `paddyo.com` |
 | `CYLINDO_ACCOUNT_ID` | `4932` |
 | `CYLINDO_FRAME` | `30` |
@@ -117,7 +117,7 @@ railway up
 | Issue | Fix |
 |---|---|
 | `P1012: Environment variable not found: DATABASE_URL` | Add Postgres (step 2), **Add Reference** `DATABASE_URL` on the **web service**, then redeploy. Variables on Postgres alone are not enough. |
-| App blank in Admin | `SHOPIFY_APP_URL` must match `application_url` in `shopify.app.production.toml` after `shopify app deploy` |
+| App blank in Admin / empty appUrl | Generate a Railway domain, set `SHOPIFY_APP_URL` to `https://...`, redeploy, then update `shopify.app.production.toml` and run `shopify app deploy --config shopify.app.production.toml` |
 | Database errors on boot | Confirm Postgres is linked and `npm run setup` (migrations) ran — check deploy logs |
 | OAuth redirect errors | Redeploy Shopify config after changing Railway domain; include `/auth/callback` redirect URLs |
 | Build fails | Ensure `package-lock.json` is committed (required by `npm ci` in Dockerfile) |
