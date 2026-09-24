@@ -20,12 +20,18 @@ https://content-v2.cylindo.com/api/v2/4932/products/FRMDSEC_3/frames/30/FRMDSEC_
 
 Use `shopify app dev` only when testing changes locally. **Do not use dev mode for production.**
 
+Requires local PostgreSQL — see [docs/RAILWAY.md](docs/RAILWAY.md#local-development).
+
 ```bash
 cd cylindo-variant-images-app
 npm install
 cp .env.example .env
-shopify app dev --store jimbo-635.myshopify.com
+# add DATABASE_URL=postgresql://postgres:postgres@localhost:5432/cylindo_app
+npx prisma migrate deploy
+shopify app dev --store pos-rsa-poc.myshopify.com
 ```
+
+Use a **dev store** (`pos-rsa-poc.myshopify.com`), not `jimbo-635` (production).
 
 ## Install on production (paddyo.com)
 
@@ -43,16 +49,21 @@ shopify app deploy
 
 If deploy fails on webhook URLs, ensure `application_url` in `shopify.app.toml` is a valid `https://` URL (not `https://shopify.dev/apps/default-app-home`). After first successful deploy, pull the hosted URL from the Dev Dashboard and set it in `shopify.app.toml` before redeploying.
 
-### 2. Host the Remix app
+### 2. Host the Remix app on Railway
 
-`shopify app deploy` publishes app **configuration**. The Remix server must run on a real host (Fly.io, Railway, Render, etc.) with:
+Deploy the app to Railway (see **[docs/RAILWAY.md](docs/RAILWAY.md)**). Set:
 
-- `SHOPIFY_APP_URL` = your public HTTPS URL
-- `SHOPIFY_API_KEY` / `SHOPIFY_API_SECRET` from `.env`
+- `SHOPIFY_APP_URL` = your Railway public URL
+- `SHOPIFY_API_KEY` / `SHOPIFY_API_SECRET`
 - `SCOPES=read_products,write_products`
-- `CYLINDO_ACCOUNT_ID=4932` (and other Cylindo vars)
+- `DATABASE_URL` from Railway Postgres
+- Cylindo vars (`CYLINDO_ACCOUNT_ID=4932`, etc.)
 
-Then set `application_url` and `[auth].redirect_urls` in `shopify.app.toml` to match that URL and run `shopify app deploy` again.
+Then update `shopify.app.production.toml` and run:
+
+```bash
+shopify app deploy --config shopify.app.production.toml
+```
 
 ### 3. Set Cylindo environment variables on the host
 
@@ -119,12 +130,15 @@ This validates URL construction against the `FRMDSEC_3` example from the plan.
 
 ## Deploy
 
-Production hosting is documented in **[docs/DIGITALOCEAN.md](docs/DIGITALOCEAN.md)** (DigitalOcean App Platform + PostgreSQL).
+Production hosting: **[docs/RAILWAY.md](docs/RAILWAY.md)** (Railway + PostgreSQL).
 
 Quick summary:
 
-1. Push repo to GitHub
-2. Create DO App from `.do/app.yaml`
-3. Set `SHOPIFY_API_SECRET` and `SHOPIFY_APP_URL` in DO
-4. Update `shopify.app.production.toml` and run `shopify app deploy --config production`
-5. Install on `jimbo-635.myshopify.com` from Dev Dashboard
+1. Railway → **New Project** → deploy `janderson64/pad-cylindo-images`
+2. Add **PostgreSQL** and link `DATABASE_URL`
+3. Set env vars (`SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, Cylindo vars)
+4. Generate Railway domain → update `SHOPIFY_APP_URL` → redeploy
+5. Update `shopify.app.production.toml` → `shopify app deploy --config production`
+6. Install on `jimbo-635.myshopify.com` from Dev Dashboard
+
+Alternative: [docs/DIGITALOCEAN.md](docs/DIGITALOCEAN.md)
