@@ -25,10 +25,8 @@ import { boundary } from "@shopify/shopify-app-remix/server";
 import { getCylindoConfig } from "../lib/cylindo-config.server";
 import type { RecentSku } from "../lib/recent-skus.server";
 import { listSyncJobs } from "../lib/sync-history.server";
-import {
-  MAX_SKUS_PER_SYNC,
-  type SyncSummary,
-} from "../lib/sync-variant-images.server";
+import type { SyncSummary } from "../lib/sync-variant-images.server";
+import { MAX_SKUS_PER_SYNC } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
 
 type ActionData =
@@ -59,7 +57,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.error("Failed to load sync history:", error);
   }
 
-  return json({ configError, syncHistory });
+  return json({ configError, syncHistory, maxSkusPerSync: MAX_SKUS_PER_SYNC });
 };
 
 export function shouldRevalidate({
@@ -121,7 +119,7 @@ export default function Index() {
   const fetcher = useFetcher<ActionData>();
   const recentSkusFetcher = useFetcher<RecentSkusData>();
   const revalidator = useRevalidator();
-  const { configError, syncHistory } = useLoaderData<typeof loader>();
+  const { configError, syncHistory, maxSkusPerSync } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
 
@@ -247,7 +245,7 @@ export default function Index() {
               onChange={setSkuInput}
               multiline={4}
               autoComplete="off"
-              helpText={`One SKU per line, or comma-separated. Up to ${MAX_SKUS_PER_SYNC} SKUs per sync (processed in batches of 50).`}
+              helpText={`One SKU per line, or comma-separated. Up to ${maxSkusPerSync} SKUs per sync (processed in batches of 50).`}
               placeholder={"FRMDSEC_3-BLISS\nFRMDSEC_3-WALNUT"}
             />
             {configError && (
