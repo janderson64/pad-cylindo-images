@@ -80,17 +80,24 @@ function Extension() {
 
     try {
       const response = await fetch(
-        `/app/sync-product?productId=${encodeURIComponent(productId)}`,
+        `/api/sync-product?productId=${encodeURIComponent(productId)}`,
       );
 
+      const contentType = response.headers.get("content-type") ?? "";
       const responseText = await response.text();
       let json;
 
-      try {
-        json = responseText ? JSON.parse(responseText) : {};
-      } catch {
+      if (contentType.includes("application/json")) {
+        try {
+          json = responseText ? JSON.parse(responseText) : {};
+        } catch {
+          throw new Error("Sync response was not valid JSON.");
+        }
+      } else {
         throw new Error(
-          responseText || `Sync request failed (${response.status}).`,
+          response.ok
+            ? "Unexpected sync response format."
+            : `Sync request failed (${response.status}).`,
         );
       }
 

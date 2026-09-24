@@ -1,6 +1,6 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useRouteError, type ShouldRevalidateFunctionArgs } from "@remix-run/react";
+import { useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
@@ -11,8 +11,8 @@ import {
 } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
 
-// Admin UI extensions call this route cross-origin. Use GET (Shopify's
-// recommended pattern) so Remix does not reject the request as CSRF.
+// Resource route for admin UI extensions. Must live outside the /app
+// layout so fetch() receives JSON instead of the embedded app HTML shell.
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   let admin;
   let session;
@@ -101,17 +101,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     );
   }
 };
-
-export function shouldRevalidate({
-  formMethod,
-  defaultShouldRevalidate,
-}: ShouldRevalidateFunctionArgs) {
-  if (formMethod === "POST") {
-    return false;
-  }
-
-  return defaultShouldRevalidate;
-}
 
 export function ErrorBoundary() {
   return boundary.error(useRouteError());

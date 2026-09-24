@@ -14,7 +14,7 @@ installGlobals({
   nativeFetch: build.future?.v3_singleFetch,
 });
 
-const ADMIN_EXTENSION_API_PATHS = new Set(["/app/sync-product"]);
+const ADMIN_EXTENSION_API_PATHS = new Set(["/api/sync-product"]);
 const REAUTH_URL_HEADER = "X-Shopify-API-Request-Failure-Reauthorize-Url";
 
 function applyAdminExtensionCorsHeaders(request, response) {
