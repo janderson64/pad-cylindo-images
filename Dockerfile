@@ -26,6 +26,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/build ./build
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/public ./public
+COPY --from=build /app/server.mjs ./server.mjs
 COPY --from=build /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
 RUN chmod +x ./scripts/docker-entrypoint.sh
 
