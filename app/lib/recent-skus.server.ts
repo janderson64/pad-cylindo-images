@@ -11,7 +11,7 @@ export type RecentSku = {
 
 const RECENT_VARIANTS_QUERY = `#graphql
   query CylindoRecentVariants($query: String!, $cursor: String) {
-    productVariants(first: 250, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
+    productVariants(first: 250, after: $cursor, query: $query) {
       pageInfo {
         hasNextPage
         endCursor
@@ -30,24 +30,78 @@ const RECENT_VARIANTS_QUERY = `#graphql
   }
 `;
 
-function buildRecentSkuSearchQuery(days: number): string {
+const RECENT_PRODUCTS_QUERY = `#graphql
+  query CylindoRecentProducts($query: String!, $cursor: String) {
+    products(first: 50, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        title
+        createdAt
+        variants(first: 100) {
+          nodes {
+            sku
+            createdAt
+            image {
+              id
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+export function getRecentSkuCutoffDate(days: number): Date {
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - days);
-  const dateFilter = since.toISOString().slice(0, 10);
+  since.setUTCHours(0, 0, 0, 0);
+  return since;
+}
+
+export function buildRecentVariantSearchQuery(days: number): string {
+  const dateFilter = getRecentSkuCutoffDate(days).toISOString().slice(0, 10);
+
+  // productVariants search supports updated_at, not created_at.
+  return `updated_at:>=${dateFilter}`;
+}
+
+export function buildRecentProductSearchQuery(days: number): string {
+  const dateFilter = getRecentSkuCutoffDate(days).toISOString().slice(0, 10);
 
   return `created_at:>=${dateFilter}`;
 }
 
-export async function fetchRecentVariantSkus(
+export function isCreatedWithinDays(createdAt: string, days: number): boolean {
+  return new Date(createdAt).getTime() >= getRecentSkuCutoffDate(days).getTime();
+}
+
+function upsertRecentSku(
+  results: Map<string, RecentSku>,
+  candidate: RecentSku,
+): void {
+  const existing = results.get(candidate.sku);
+
+  if (
+    !existing ||
+    new Date(candidate.createdAt).getTime() > new Date(existing.createdAt).getTime()
+  ) {
+    results.set(candidate.sku, candidate);
+  }
+}
+
+async function fetchRecentVariantsByUpdatedAt(
   admin: { graphql: AdminGraphql },
-  days = 30,
-  maxResults = 500,
-): Promise<RecentSku[]> {
-  const query = buildRecentSkuSearchQuery(days);
-  const results: RecentSku[] = [];
+  days: number,
+  maxResults: number,
+  results: Map<string, RecentSku>,
+): Promise<void> {
+  const query = buildRecentVariantSearchQuery(days);
   let cursor: string | null = null;
 
-  while (results.length < maxResults) {
+  while (results.size < maxResults) {
     const response = await admin.graphql(RECENT_VARIANTS_QUERY, {
       variables: {
         query,
@@ -56,6 +110,7 @@ export async function fetchRecentVariantSkus(
     });
 
     const json = (await response.json()) as {
+      errors?: Array<{ message: string }>;
       data?: {
         productVariants?: {
           pageInfo?: {
@@ -72,25 +127,31 @@ export async function fetchRecentVariantSkus(
       };
     };
 
+    if (json.errors?.length) {
+      throw new Error(
+        json.errors.map((error) => error.message).join("; "),
+      );
+    }
+
     const connection = json.data?.productVariants;
     const nodes = connection?.nodes ?? [];
 
     for (const node of nodes) {
       const sku = node.sku?.trim();
 
-      if (!sku) {
+      if (!sku || !isCreatedWithinDays(node.createdAt, days)) {
         continue;
       }
 
-      results.push({
+      upsertRecentSku(results, {
         sku,
         productTitle: node.product.title,
         createdAt: node.createdAt,
         hasImage: Boolean(node.image?.id),
       });
 
-      if (results.length >= maxResults) {
-        break;
+      if (results.size >= maxResults) {
+        return;
       }
     }
 
@@ -100,6 +161,100 @@ export async function fetchRecentVariantSkus(
 
     cursor = connection.pageInfo.endCursor;
   }
+}
 
-  return results;
+async function fetchRecentVariantsFromNewProducts(
+  admin: { graphql: AdminGraphql },
+  days: number,
+  maxResults: number,
+  results: Map<string, RecentSku>,
+): Promise<void> {
+  const query = buildRecentProductSearchQuery(days);
+  let cursor: string | null = null;
+
+  while (results.size < maxResults) {
+    const response = await admin.graphql(RECENT_PRODUCTS_QUERY, {
+      variables: {
+        query,
+        cursor,
+      },
+    });
+
+    const json = (await response.json()) as {
+      errors?: Array<{ message: string }>;
+      data?: {
+        products?: {
+          pageInfo?: {
+            hasNextPage?: boolean;
+            endCursor?: string | null;
+          };
+          nodes?: Array<{
+            title: string;
+            createdAt: string;
+            variants: {
+              nodes: Array<{
+                sku: string | null;
+                createdAt: string;
+                image: { id: string } | null;
+              }>;
+            };
+          }>;
+        };
+      };
+    };
+
+    if (json.errors?.length) {
+      throw new Error(
+        json.errors.map((error) => error.message).join("; "),
+      );
+    }
+
+    const connection = json.data?.products;
+    const nodes = connection?.nodes ?? [];
+
+    for (const product of nodes) {
+      for (const variant of product.variants.nodes) {
+        const sku = variant.sku?.trim();
+
+        if (!sku || !isCreatedWithinDays(variant.createdAt, days)) {
+          continue;
+        }
+
+        upsertRecentSku(results, {
+          sku,
+          productTitle: product.title,
+          createdAt: variant.createdAt,
+          hasImage: Boolean(variant.image?.id),
+        });
+
+        if (results.size >= maxResults) {
+          return;
+        }
+      }
+    }
+
+    if (!connection?.pageInfo?.hasNextPage || !connection.pageInfo.endCursor) {
+      break;
+    }
+
+    cursor = connection.pageInfo.endCursor;
+  }
+}
+
+export async function fetchRecentVariantSkus(
+  admin: { graphql: AdminGraphql },
+  days = 30,
+  maxResults = 500,
+): Promise<RecentSku[]> {
+  const results = new Map<string, RecentSku>();
+
+  await Promise.all([
+    fetchRecentVariantsByUpdatedAt(admin, days, maxResults, results),
+    fetchRecentVariantsFromNewProducts(admin, days, maxResults, results),
+  ]);
+
+  return [...results.values()].sort(
+    (left, right) =>
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
 }

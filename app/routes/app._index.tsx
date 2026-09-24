@@ -55,17 +55,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   let syncHistory: Awaited<ReturnType<typeof listSyncJobs>> = [];
   let recentSkus: Awaited<ReturnType<typeof fetchRecentVariantSkus>> = [];
+  let recentSkusError: string | null = null;
 
-  try {
-    [syncHistory, recentSkus] = await Promise.all([
-      listSyncJobs(session.shop),
-      fetchRecentVariantSkus(admin),
-    ]);
-  } catch (error) {
-    console.error("Failed to load sync dashboard data:", error);
+  const [syncHistoryResult, recentSkusResult] = await Promise.allSettled([
+    listSyncJobs(session.shop),
+    fetchRecentVariantSkus(admin),
+  ]);
+
+  if (syncHistoryResult.status === "fulfilled") {
+    syncHistory = syncHistoryResult.value;
+  } else {
+    console.error("Failed to load sync history:", syncHistoryResult.reason);
   }
 
-  return json({ configSummary, configError, syncHistory, recentSkus });
+  if (recentSkusResult.status === "fulfilled") {
+    recentSkus = recentSkusResult.value;
+  } else {
+    recentSkusError =
+      recentSkusResult.reason instanceof Error
+        ? recentSkusResult.reason.message
+        : "Failed to load recently added SKUs";
+    console.error("Failed to load recent SKUs:", recentSkusResult.reason);
+  }
+
+  return json({ configSummary, configError, syncHistory, recentSkus, recentSkusError });
 };
 
 export function shouldRevalidate({
@@ -126,7 +139,7 @@ function buildLogRows(summary: SyncSummary) {
 export default function Index() {
   const fetcher = useFetcher<ActionData>();
   const revalidator = useRevalidator();
-  const { configSummary, configError, syncHistory, recentSkus } =
+  const { configSummary, configError, syncHistory, recentSkus, recentSkusError } =
     useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
@@ -387,6 +400,11 @@ export default function Index() {
               Variants created in the last 30 days. Copy the list or load it
               into the sync field above.
             </Text>
+            {recentSkusError && (
+              <Banner tone="warning" title="Could not load recent SKUs">
+                <p>{recentSkusError}</p>
+              </Banner>
+            )}
             {recentSkus.length > 0 ? (
               <>
                 <TextField
