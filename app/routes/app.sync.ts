@@ -31,16 +31,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
+    const formData = await request.formData();
+    const skus = String(formData.get("skus") ?? "");
+
     const summary = truncateSyncSummaryForClient(
-      await syncCylindoVariantImages(admin),
+      await syncCylindoVariantImages(admin, skus),
     );
 
-    if (summary.timedOut) {
+    if (summary.statusMessage && summary.synced.length === 0 && summary.failed.length === 0) {
       return json({
         ok: false as const,
-        error:
-          summary.statusMessage ??
-          "Sync stopped early to avoid a request timeout. Run sync again to continue.",
+        error: summary.statusMessage,
         summary,
       });
     }

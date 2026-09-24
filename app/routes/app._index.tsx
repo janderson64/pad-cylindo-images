@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import {
@@ -18,6 +18,7 @@ import {
   Banner,
   InlineStack,
   DataTable,
+  TextField,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-remix/server";
@@ -97,12 +98,20 @@ export default function Index() {
   const fetcher = useFetcher<ActionData>();
   const { configSummary, configError } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
+  const [skuInput, setSkuInput] = useState("");
 
   const isLoading =
     ["loading", "submitting"].includes(fetcher.state) &&
     fetcher.formMethod === "POST";
 
   const runSync = useCallback(async () => {
+    const skus = skuInput.trim();
+
+    if (!skus) {
+      shopify.toast.show("Enter at least one variant SKU", { isError: true });
+      return;
+    }
+
     const params = new URLSearchParams(window.location.search);
 
     try {
@@ -116,8 +125,11 @@ export default function Index() {
       return;
     }
 
-    fetcher.submit({}, { method: "POST", action: `/app/sync?${params.toString()}` });
-  }, [fetcher, shopify]);
+    fetcher.submit(
+      { skus },
+      { method: "POST", action: `/app/sync?${params.toString()}` },
+    );
+  }, [fetcher, shopify, skuInput]);
 
   useEffect(() => {
     if (fetcher.data?.ok) {
@@ -129,8 +141,11 @@ export default function Index() {
     }
   }, [fetcher.data, shopify]);
 
-  const summary = fetcher.data?.ok ? fetcher.data.summary : null;
-  const syncDisabled = Boolean(configError) || isLoading;
+  const summary =
+    fetcher.data && (fetcher.data.ok || fetcher.data.summary)
+      ? fetcher.data.summary
+      : null;
+  const syncDisabled = Boolean(configError) || isLoading || !skuInput.trim();
 
   return (
     <Page>
@@ -152,11 +167,20 @@ export default function Index() {
                   Sync frame 30 images from Cylindo
                 </Text>
                 <Text as="p" variant="bodyMd">
-                  Scans products with <code>cylindo.enabled = true</code>, builds
+                  Enter variant SKUs to sync. The app looks up each SKU, builds
                   a Cylindo frame URL from product and variant metafields, and
-                  uploads the image only for variants that do not already have an
-                  image.
+                  uploads the image only when the variant does not already have
+                  one.
                 </Text>
+                <TextField
+                  label="Variant SKUs"
+                  value={skuInput}
+                  onChange={setSkuInput}
+                  multiline={4}
+                  autoComplete="off"
+                  helpText="One SKU per line, or comma-separated. Up to 50 SKUs per sync."
+                  placeholder={"FRMDSEC_3-BLISS\nFRMDSEC_3-WALNUT"}
+                />
                 {configError && (
                   <Banner tone="warning" title="Configuration required">
                     <p>{configError}</p>
@@ -219,7 +243,7 @@ export default function Index() {
               )}
               <InlineStack gap="400">
                 <Text as="span" variant="bodyMd">
-                  Products scanned: {summary.productsScanned}
+                  SKUs requested: {summary.variantsRequested}
                 </Text>
                 <Text as="span" variant="bodyMd">
                   Synced: {summary.synced.length}

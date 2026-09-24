@@ -21,61 +21,47 @@ export type SyncSummary = {
   skippedHasImage: SyncLogEntry[];
   skippedMissingMetafields: SyncLogEntry[];
   failed: SyncLogEntry[];
-  productsScanned: number;
-  timedOut?: boolean;
+  variantsRequested: number;
   statusMessage?: string;
 };
 
-const MAX_SYNC_MS = 55_000;
+const MAX_SKUS_PER_SYNC = 50;
 
 type AdminGraphql = AdminApiContext["graphql"];
 
-type ProductNode = {
+type VariantLookup = {
   id: string;
-  title: string;
-  metafields: {
-    nodes: Array<{ key: string; value: string | null }>;
-  };
-  variants: {
-    nodes: Array<{
-      id: string;
-      sku: string | null;
-      image: { id: string } | null;
-      metafield: { jsonValue: unknown } | null;
-    }>;
-    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  sku: string | null;
+  image: { id: string } | null;
+  metafield: { jsonValue: unknown } | null;
+  product: {
+    id: string;
+    title: string;
+    metafields: {
+      nodes: Array<{ key: string; value: string | null }>;
+    };
   };
 };
 
-const PRODUCTS_QUERY = `#graphql
-  query CylindoProducts($cursor: String) {
-    products(first: 50, after: $cursor, query: "metafields.cylindo.enabled:true") {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
+const VARIANT_BY_SKU_QUERY = `#graphql
+  query CylindoVariantBySku($query: String!) {
+    productVariants(first: 1, query: $query) {
       nodes {
         id
-        title
-        metafields(first: 20, namespace: "cylindo") {
-          nodes {
-            key
-            value
-          }
+        sku
+        image {
+          id
         }
-        variants(first: 100) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            id
-            sku
-            image {
-              id
-            }
-            metafield(namespace: "cylindo", key: "features_code") {
-              jsonValue
+        metafield(namespace: "cylindo", key: "features_code") {
+          jsonValue
+        }
+        product {
+          id
+          title
+          metafields(first: 20, namespace: "cylindo") {
+            nodes {
+              key
+              value
             }
           }
         }
@@ -127,6 +113,39 @@ function entry(
     variantId: variant.id,
     message,
     url,
+  };
+}
+
+export function parseSkuList(input: string): string[] {
+  const seen = new Set<string>();
+  const skus: string[] = [];
+
+  for (const part of input.split(/[\n,]+/)) {
+    const sku = part.trim();
+    if (!sku) continue;
+
+    const key = sku.toLowerCase();
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    skus.push(sku);
+  }
+
+  return skus;
+}
+
+function buildSkuSearchQuery(sku: string): string {
+  const escaped = sku.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `sku:"${escaped}"`;
+}
+
+function emptySummary(): SyncSummary {
+  return {
+    synced: [],
+    skippedHasImage: [],
+    skippedMissingMetafields: [],
+    failed: [],
+    variantsRequested: 0,
   };
 }
 
@@ -185,96 +204,18 @@ async function attachImageToVariant(
   return null;
 }
 
-async function syncProductVariants(
+async function fetchVariantBySku(
   admin: { graphql: AdminGraphql },
-  product: ProductNode,
-  summary: SyncSummary,
-): Promise<void> {
-  const config = getCylindoConfig();
-  const productMetafields = parseProductMetafields(product.metafields.nodes);
-
-  for (const variant of product.variants.nodes) {
-    if (variant.image?.id) {
-      summary.skippedHasImage.push(
-        entry(product.title, variant, "Variant already has an image"),
-      );
-      continue;
-    }
-
-    const featuresCode = parseFeaturesCode(variant.metafield?.jsonValue);
-
-    if (featuresCode.length === 0) {
-      summary.skippedMissingMetafields.push(
-        entry(product.title, variant, "Missing variant metafield cylindo.features_code"),
-      );
-      continue;
-    }
-
-    const urlResult = buildCylindoFrameUrlForVariant(
-      config,
-      productMetafields,
-      featuresCode,
-    );
-
-    if (!urlResult.ok) {
-      summary.skippedMissingMetafields.push(
-        entry(product.title, variant, urlResult.reason),
-      );
-      continue;
-    }
-
-    const imageExists = await validateCylindoImageUrl(urlResult.url);
-
-    if (!imageExists) {
-      summary.failed.push(
-        entry(
-          product.title,
-          variant,
-          "Cylindo image not found for feature combination",
-          urlResult.url,
-        ),
-      );
-      continue;
-    }
-
-    const alt = `Cylindo frame ${config.frame} — ${variant.sku ?? variant.id}`;
-    const shopifyError = await attachImageToVariant(
-      admin,
-      product.id,
-      variant.id,
-      urlResult.url,
-      alt,
-    );
-
-    if (shopifyError) {
-      summary.failed.push(
-        entry(product.title, variant, shopifyError, urlResult.url),
-      );
-      continue;
-    }
-
-    summary.synced.push(
-      entry(product.title, variant, "Synced Cylindo frame image", urlResult.url),
-    );
-  }
-}
-
-async function fetchProductsPage(
-  admin: { graphql: AdminGraphql },
-  cursor: string | null,
-): Promise<{
-  nodes: ProductNode[];
-  hasNextPage: boolean;
-  endCursor: string | null;
-}> {
-  const response = await admin.graphql(PRODUCTS_QUERY, {
-    variables: { cursor },
+  sku: string,
+): Promise<VariantLookup | null> {
+  const response = await admin.graphql(VARIANT_BY_SKU_QUERY, {
+    variables: { query: buildSkuSearchQuery(sku) },
   });
+
   const json = (await response.json()) as {
     data?: {
-      products?: {
-        nodes?: ProductNode[];
-        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+      productVariants?: {
+        nodes?: VariantLookup[];
       };
     };
     errors?: Array<{ message?: string }>;
@@ -283,64 +224,137 @@ async function fetchProductsPage(
   if (Array.isArray(json.errors) && json.errors.length > 0) {
     throw new Error(
       json.errors
-        .map((error: { message?: string }) => error.message ?? "GraphQL error")
+        .map((error) => error.message ?? "GraphQL error")
         .join("; "),
     );
   }
 
-  const products = json.data?.products;
-
-  return {
-    nodes: products?.nodes ?? [],
-    hasNextPage: products?.pageInfo?.hasNextPage ?? false,
-    endCursor: products?.pageInfo?.endCursor ?? null,
-  };
+  return json.data?.productVariants?.nodes?.[0] ?? null;
 }
 
-export async function syncCylindoVariantImages(
-  admin: {
-    graphql: AdminGraphql;
-  },
-  options?: { deadlineMs?: number },
+async function syncVariant(
+  admin: { graphql: AdminGraphql },
+  variant: VariantLookup,
+  summary: SyncSummary,
+): Promise<void> {
+  const config = getCylindoConfig();
+  const productMetafields = parseProductMetafields(variant.product.metafields.nodes);
+  const enabled = productMetafields.enabled?.trim().toLowerCase();
+
+  if (enabled !== "true" && enabled !== "1") {
+    summary.skippedMissingMetafields.push(
+      entry(
+        variant.product.title,
+        variant,
+        "Product is not Cylindo-enabled (cylindo.enabled is not true)",
+      ),
+    );
+    return;
+  }
+
+  if (variant.image?.id) {
+    summary.skippedHasImage.push(
+      entry(variant.product.title, variant, "Variant already has an image"),
+    );
+    return;
+  }
+
+  const featuresCode = parseFeaturesCode(variant.metafield?.jsonValue);
+
+  if (featuresCode.length === 0) {
+    summary.skippedMissingMetafields.push(
+      entry(
+        variant.product.title,
+        variant,
+        "Missing variant metafield cylindo.features_code",
+      ),
+    );
+    return;
+  }
+
+  const urlResult = buildCylindoFrameUrlForVariant(
+    config,
+    productMetafields,
+    featuresCode,
+  );
+
+  if (!urlResult.ok) {
+    summary.skippedMissingMetafields.push(
+      entry(variant.product.title, variant, urlResult.reason),
+    );
+    return;
+  }
+
+  const imageExists = await validateCylindoImageUrl(urlResult.url);
+
+  if (!imageExists) {
+    summary.failed.push(
+      entry(
+        variant.product.title,
+        variant,
+        "Cylindo image not found for feature combination",
+        urlResult.url,
+      ),
+    );
+    return;
+  }
+
+  const alt = `Cylindo frame ${config.frame} — ${variant.sku ?? variant.id}`;
+  const shopifyError = await attachImageToVariant(
+    admin,
+    variant.product.id,
+    variant.id,
+    urlResult.url,
+    alt,
+  );
+
+  if (shopifyError) {
+    summary.failed.push(
+      entry(variant.product.title, variant, shopifyError, urlResult.url),
+    );
+    return;
+  }
+
+  summary.synced.push(
+    entry(variant.product.title, variant, "Synced Cylindo frame image", urlResult.url),
+  );
+}
+
+export async function syncCylindoVariantImagesBySkus(
+  admin: { graphql: AdminGraphql },
+  skusInput: string,
 ): Promise<SyncSummary> {
-  const deadlineMs = options?.deadlineMs ?? MAX_SYNC_MS;
-  const startedAt = Date.now();
+  const skus = parseSkuList(skusInput);
+
+  if (skus.length === 0) {
+    const summary = emptySummary();
+    summary.statusMessage = "Enter at least one variant SKU to sync.";
+    return summary;
+  }
+
+  if (skus.length > MAX_SKUS_PER_SYNC) {
+    throw new Error(`Too many SKUs. Sync up to ${MAX_SKUS_PER_SYNC} at a time.`);
+  }
 
   const summary: SyncSummary = {
-    synced: [],
-    skippedHasImage: [],
-    skippedMissingMetafields: [],
-    failed: [],
-    productsScanned: 0,
+    ...emptySummary(),
+    variantsRequested: skus.length,
   };
 
-  let cursor: string | null = null;
-  let hasNextPage = true;
+  for (const sku of skus) {
+    const variant = await fetchVariantBySku(admin, sku);
 
-  while (hasNextPage) {
-    if (Date.now() - startedAt > deadlineMs) {
-      summary.timedOut = true;
-      summary.statusMessage =
-        "Sync stopped early to avoid a request timeout. Run sync again to continue.";
-      break;
+    if (!variant) {
+      summary.failed.push({
+        productTitle: "(not found)",
+        sku,
+        variantId: "",
+        message: "No variant found with this SKU",
+      });
+      continue;
     }
 
-    const page = await fetchProductsPage(admin, cursor);
-
-    for (const product of page.nodes) {
-      if (Date.now() - startedAt > deadlineMs) {
-        summary.timedOut = true;
-        summary.statusMessage =
-          "Sync stopped early to avoid a request timeout. Run sync again to continue.";
-        return summary;
-      }
-
-      summary.productsScanned += 1;
-      await syncProductVariants(admin, product, summary);
-    }
-
-    hasNextPage = page.hasNextPage;
-    cursor = page.endCursor;
+    await syncVariant(admin, variant, summary);
   }
 
   return summary;
@@ -358,3 +372,6 @@ export function truncateSyncSummaryForClient(
     failed: summary.failed.slice(0, limit),
   };
 }
+
+// Backwards-compatible export name used by the sync route.
+export const syncCylindoVariantImages = syncCylindoVariantImagesBySkus;
