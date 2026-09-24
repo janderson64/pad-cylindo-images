@@ -4,6 +4,7 @@ import { json } from "@remix-run/node";
 import {
   useFetcher,
   useLoaderData,
+  useRevalidator,
   useRouteError,
   type ShouldRevalidateFunctionArgs,
 } from "@remix-run/react";
@@ -24,6 +25,8 @@ import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
+import { fetchRecentVariantSkus } from "../lib/recent-skus.server";
+import { listSyncJobs } from "../lib/sync-history.server";
 import type { SyncSummary } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
 
@@ -32,7 +35,7 @@ type ActionData =
   | { ok: false; error: string; summary?: SyncSummary };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
   let configSummary: Record<string, string | number> | null = null;
   let configError: string | null = null;
@@ -50,7 +53,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       error instanceof Error ? error.message : "Missing Cylindo configuration";
   }
 
-  return json({ configSummary, configError });
+  let syncHistory: Awaited<ReturnType<typeof listSyncJobs>> = [];
+  let recentSkus: Awaited<ReturnType<typeof fetchRecentVariantSkus>> = [];
+
+  try {
+    [syncHistory, recentSkus] = await Promise.all([
+      listSyncJobs(session.shop),
+      fetchRecentVariantSkus(admin),
+    ]);
+  } catch (error) {
+    console.error("Failed to load sync dashboard data:", error);
+  }
+
+  return json({ configSummary, configError, syncHistory, recentSkus });
 };
 
 export function shouldRevalidate({
@@ -71,6 +86,20 @@ export function ErrorBoundary() {
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString();
+}
+
+function truncateSkuInput(skuInput: string, maxLength = 80): string {
+  const normalized = skuInput.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
 
 function buildLogRows(summary: SyncSummary) {
   const rows: Array<[string, string, string, string]> = [];
@@ -96,9 +125,13 @@ function buildLogRows(summary: SyncSummary) {
 
 export default function Index() {
   const fetcher = useFetcher<ActionData>();
-  const { configSummary, configError } = useLoaderData<typeof loader>();
+  const revalidator = useRevalidator();
+  const { configSummary, configError, syncHistory, recentSkus } =
+    useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
+
+  const recentSkuList = recentSkus.map((item) => item.sku).join("\n");
 
   const isLoading =
     ["loading", "submitting"].includes(fetcher.state) &&
@@ -136,10 +169,36 @@ export default function Index() {
       shopify.toast.show(
         `Sync complete: ${fetcher.data.summary.synced.length} synced`,
       );
+      revalidator.revalidate();
     } else if (fetcher.data && !fetcher.data.ok) {
       shopify.toast.show(fetcher.data.error, { isError: true });
+      if (fetcher.data.summary) {
+        revalidator.revalidate();
+      }
     }
-  }, [fetcher.data, shopify]);
+  }, [fetcher.data, revalidator, shopify]);
+
+  const copyRecentSkus = useCallback(async () => {
+    if (!recentSkuList) {
+      shopify.toast.show("No recent SKUs to copy", { isError: true });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(recentSkuList);
+      shopify.toast.show(`Copied ${recentSkus.length} SKUs`);
+    } catch (error) {
+      shopify.toast.show(
+        error instanceof Error ? error.message : "Could not copy SKUs",
+        { isError: true },
+      );
+    }
+  }, [recentSkuList, recentSkus.length, shopify]);
+
+  const fillSyncInputWithRecentSkus = useCallback(() => {
+    setSkuInput(recentSkuList);
+    shopify.toast.show(`Loaded ${recentSkus.length} SKUs into sync input`);
+  }, [recentSkuList, recentSkus.length, shopify]);
 
   const summary =
     fetcher.data && (fetcher.data.ok || fetcher.data.summary)
@@ -272,6 +331,98 @@ export default function Index() {
             </BlockStack>
           </Card>
         )}
+
+        <Card>
+          <BlockStack gap="400">
+            <Text as="h2" variant="headingMd">
+              Sync history
+            </Text>
+            <Text as="p" variant="bodyMd">
+              Previous sync jobs for this shop, newest first.
+            </Text>
+            {syncHistory.length > 0 ? (
+              <DataTable
+                columnContentTypes={[
+                  "text",
+                  "numeric",
+                  "numeric",
+                  "numeric",
+                  "numeric",
+                  "numeric",
+                  "text",
+                ]}
+                headings={[
+                  "When",
+                  "Requested",
+                  "Synced",
+                  "Skipped (image)",
+                  "Skipped (meta)",
+                  "Failed",
+                  "SKUs",
+                ]}
+                rows={syncHistory.map((job) => [
+                  formatDateTime(job.createdAt),
+                  String(job.variantsRequested),
+                  String(job.syncedCount),
+                  String(job.skippedHasImageCount),
+                  String(job.skippedMissingMetafieldsCount),
+                  String(job.failedCount),
+                  truncateSkuInput(job.skuInput),
+                ])}
+              />
+            ) : (
+              <Text as="p" variant="bodyMd">
+                No sync jobs yet. Run a sync to start building history.
+              </Text>
+            )}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <Text as="h2" variant="headingMd">
+              Recently added SKUs
+            </Text>
+            <Text as="p" variant="bodyMd">
+              Variants created in the last 30 days. Copy the list or load it
+              into the sync field above.
+            </Text>
+            {recentSkus.length > 0 ? (
+              <>
+                <TextField
+                  label="SKU list"
+                  value={recentSkuList}
+                  multiline={6}
+                  autoComplete="off"
+                  readOnly
+                  helpText="One SKU per line, ready to copy into another tool or the sync field."
+                />
+                <InlineStack gap="300">
+                  <Button onClick={() => void copyRecentSkus()}>
+                    Copy SKUs
+                  </Button>
+                  <Button onClick={fillSyncInputWithRecentSkus}>
+                    Use in sync field
+                  </Button>
+                </InlineStack>
+                <DataTable
+                  columnContentTypes={["text", "text", "text", "text"]}
+                  headings={["SKU", "Product", "Created", "Has image"]}
+                  rows={recentSkus.map((item) => [
+                    item.sku,
+                    item.productTitle,
+                    formatDateTime(item.createdAt),
+                    item.hasImage ? "Yes" : "No",
+                  ])}
+                />
+              </>
+            ) : (
+              <Text as="p" variant="bodyMd">
+                No variants with SKUs were created in the last 30 days.
+              </Text>
+            )}
+          </BlockStack>
+        </Card>
       </BlockStack>
     </Page>
   );

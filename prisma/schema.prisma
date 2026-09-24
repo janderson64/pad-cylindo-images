@@ -29,3 +29,19 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model SyncJob {
+  id                            String   @id @default(cuid())
+  shop                          String
+  createdAt                     DateTime @default(now())
+  skuInput                      String
+  variantsRequested             Int
+  syncedCount                   Int
+  skippedHasImageCount          Int
+  skippedMissingMetafieldsCount Int
+  failedCount                   Int
+  statusMessage                 String?
+  results                       Json
+
+  @@index([shop, createdAt(sort: Desc)])
+}

@@ -4,6 +4,7 @@ import { useRouteError, type ShouldRevalidateFunctionArgs } from "@remix-run/rea
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
+import { createSyncJob } from "../lib/sync-history.server";
 import {
   syncCylindoVariantImages,
   truncateSyncSummaryForClient,
@@ -12,9 +13,10 @@ import { authenticate } from "../shopify.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   let admin;
+  let session;
 
   try {
-    ({ admin } = await authenticate.admin(request));
+    ({ admin, session } = await authenticate.admin(request));
   } catch (error) {
     console.error("Sync action authentication failed:", error);
     throw error;
@@ -37,6 +39,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const summary = truncateSyncSummaryForClient(
       await syncCylindoVariantImages(admin, skus),
     );
+
+    try {
+      await createSyncJob(session.shop, skus, summary);
+    } catch (historyError) {
+      console.error("Failed to persist sync job history:", historyError);
+    }
 
     if (summary.statusMessage && summary.synced.length === 0 && summary.failed.length === 0) {
       return json({
