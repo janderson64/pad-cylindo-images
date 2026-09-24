@@ -75,10 +75,22 @@ const CREATE_MEDIA_MUTATION = `#graphql
     productCreateMedia(productId: $productId, media: $media) {
       media {
         id
+        status
       }
       mediaUserErrors {
         field
         message
+      }
+    }
+  }
+`;
+
+const MEDIA_STATUS_QUERY = `#graphql
+  query CylindoMediaStatus($id: ID!) {
+    node(id: $id) {
+      ... on Media {
+        id
+        status
       }
     }
   }
@@ -149,6 +161,47 @@ function emptySummary(): SyncSummary {
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForMediaReady(
+  admin: { graphql: AdminGraphql },
+  mediaId: string,
+  maxAttempts = 15,
+  delayMs = 1000,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const response = await admin.graphql(MEDIA_STATUS_QUERY, {
+      variables: { id: mediaId },
+    });
+
+    const json = (await response.json()) as {
+      data?: {
+        node?: {
+          status?: string;
+        };
+      };
+    };
+
+    const status = json.data?.node?.status;
+
+    if (status === "READY") {
+      return null;
+    }
+
+    if (status === "FAILED") {
+      return "Shopify media processing failed";
+    }
+
+    if (attempt < maxAttempts - 1) {
+      await sleep(delayMs);
+    }
+  }
+
+  return "Timed out waiting for Shopify to process the image";
+}
+
 async function attachImageToVariant(
   admin: { graphql: AdminGraphql },
   productId: string,
@@ -180,6 +233,11 @@ async function attachImageToVariant(
 
   if (!mediaId) {
     return "productCreateMedia did not return a media id";
+  }
+
+  const waitError = await waitForMediaReady(admin, mediaId);
+  if (waitError) {
+    return waitError;
   }
 
   const appendResponse = await admin.graphql(APPEND_MEDIA_MUTATION, {
