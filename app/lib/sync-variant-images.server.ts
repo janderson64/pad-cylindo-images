@@ -585,5 +585,69 @@ export function truncateSyncSummaryForClient(
   };
 }
 
+export function buildBatchProgressLogs(summary: SyncSummary): string[] {
+  const logs: string[] = [];
+
+  for (const item of summary.synced) {
+    logs.push(`Synced ${item.sku}`);
+  }
+
+  for (const item of summary.skippedHasImage) {
+    logs.push(`Skipped ${item.sku} (already has image)`);
+  }
+
+  for (const item of summary.skippedMissingMetafields) {
+    logs.push(`Skipped ${item.sku} (${item.message})`);
+  }
+
+  for (const item of summary.failed) {
+    logs.push(`Failed ${item.sku}: ${item.message}`);
+  }
+
+  return logs;
+}
+
+export type ProductSyncBatchResult = {
+  summary: SyncSummary;
+  batchIndex: number;
+  batchCount: number;
+  skusTotal: number;
+  productTitle: string;
+};
+
+export async function syncCylindoVariantImagesByProductIdBatch(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+  batchIndex: number,
+): Promise<ProductSyncBatchResult> {
+  const { productTitle, skus } = await fetchProductVariantSkus(admin, productId);
+  const batchCount = Math.max(1, Math.ceil(skus.length / SYNC_BATCH_SIZE));
+
+  if (batchIndex < 0 || batchIndex >= batchCount) {
+    throw new Error(`Invalid batch index ${batchIndex + 1} of ${batchCount}.`);
+  }
+
+  const batchSkus = skus.slice(
+    batchIndex * SYNC_BATCH_SIZE,
+    batchIndex * SYNC_BATCH_SIZE + SYNC_BATCH_SIZE,
+  );
+  const summary = await syncSkuBatch(admin, batchSkus);
+  summary.variantsRequested = skus.length;
+
+  if (batchCount > 1) {
+    summary.statusMessage = `Processed ${skus.length} SKUs in ${batchCount} batches of up to ${SYNC_BATCH_SIZE}.`;
+  } else if (summary.statusMessage === "No variant SKUs to sync.") {
+    summary.statusMessage = `${productTitle} has no variant SKUs to sync.`;
+  }
+
+  return {
+    summary,
+    batchIndex,
+    batchCount,
+    skusTotal: skus.length,
+    productTitle,
+  };
+}
+
 // Backwards-compatible export name used by the sync route.
 export const syncCylindoVariantImages = syncCylindoVariantImagesBySkus;

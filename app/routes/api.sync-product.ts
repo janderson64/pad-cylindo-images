@@ -4,12 +4,36 @@ import { useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
-import { createSyncJob } from "../lib/sync-history.server";
 import {
+  createSyncJob,
+  createSyncJobFromCounts,
+} from "../lib/sync-history.server";
+import {
+  buildBatchProgressLogs,
   syncCylindoVariantImagesByProductId,
+  syncCylindoVariantImagesByProductIdBatch,
   truncateSyncSummaryForClient,
 } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
+
+function parseOptionalCount(
+  url: URL,
+  key: string,
+): number | undefined {
+  const value = url.searchParams.get(key);
+
+  if (value === null || value.trim() === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
 
 // Resource route for admin UI extensions. Must live outside the /app
 // layout so fetch() receives JSON instead of the embedded app HTML shell.
@@ -52,12 +76,107 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       );
     }
 
+    const batchParam = url.searchParams.get("batch");
+    const skuInput = `product:${productId}`;
+
+    if (url.searchParams.get("historyOnly") === "1") {
+      const variantsRequested = parseOptionalCount(url, "variantsRequested");
+
+      if (variantsRequested === undefined) {
+        return cors(
+          json({
+            ok: false as const,
+            error: "Missing variantsRequested for history",
+          }),
+        );
+      }
+
+      try {
+        await createSyncJobFromCounts(session.shop, skuInput, {
+          variantsRequested,
+          syncedCount: parseOptionalCount(url, "syncedCount") ?? 0,
+          skippedHasImageCount:
+            parseOptionalCount(url, "skippedHasImageCount") ?? 0,
+          skippedMissingMetafieldsCount:
+            parseOptionalCount(url, "skippedMissingMetafieldsCount") ?? 0,
+          failedCount: parseOptionalCount(url, "failedCount") ?? 0,
+          statusMessage: url.searchParams.get("statusMessage"),
+        });
+      } catch (historyError) {
+        console.error("Failed to persist sync job history:", historyError);
+        return cors(
+          json({
+            ok: false as const,
+            error: "Failed to save sync history",
+          }),
+        );
+      }
+
+      return cors(json({ ok: true as const }));
+    }
+
+    if (batchParam !== null) {
+      const batchIndex = Number(batchParam);
+
+      if (!Number.isInteger(batchIndex) || batchIndex < 0) {
+        return cors(
+          json({
+            ok: false as const,
+            error: "Invalid batch index",
+          }),
+        );
+      }
+
+      const batchResult = await syncCylindoVariantImagesByProductIdBatch(
+        admin,
+        productId,
+        batchIndex,
+      );
+      const summary = truncateSyncSummaryForClient(batchResult.summary, 50);
+      const logs = buildBatchProgressLogs(summary);
+
+      if (
+        summary.statusMessage &&
+        summary.synced.length === 0 &&
+        summary.failed.length === 0 &&
+        summary.skippedHasImage.length === 0 &&
+        summary.skippedMissingMetafields.length === 0
+      ) {
+        return cors(
+          json({
+            ok: false as const,
+            error: summary.statusMessage,
+            summary,
+            progress: {
+              batchIndex: batchResult.batchIndex,
+              batchCount: batchResult.batchCount,
+              skusTotal: batchResult.skusTotal,
+              productTitle: batchResult.productTitle,
+            },
+            logs,
+          }),
+        );
+      }
+
+      return cors(
+        json({
+          ok: true as const,
+          summary,
+          progress: {
+            batchIndex: batchResult.batchIndex,
+            batchCount: batchResult.batchCount,
+            skusTotal: batchResult.skusTotal,
+            productTitle: batchResult.productTitle,
+          },
+          logs,
+        }),
+      );
+    }
+
     const summary = truncateSyncSummaryForClient(
       await syncCylindoVariantImagesByProductId(admin, productId),
       50,
     );
-
-    const skuInput = `product:${productId}`;
 
     try {
       await createSyncJob(session.shop, skuInput, summary);

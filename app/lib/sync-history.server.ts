@@ -35,6 +35,35 @@ export async function createSyncJob(
   });
 }
 
+export async function createSyncJobFromCounts(
+  shop: string,
+  skuInput: string,
+  counts: {
+    variantsRequested: number;
+    syncedCount: number;
+    skippedHasImageCount: number;
+    skippedMissingMetafieldsCount: number;
+    failedCount: number;
+    statusMessage?: string | null;
+  },
+): Promise<void> {
+  await prisma.syncJob.create({
+    data: {
+      shop,
+      skuInput,
+      variantsRequested: counts.variantsRequested,
+      syncedCount: counts.syncedCount,
+      skippedHasImageCount: counts.skippedHasImageCount,
+      skippedMissingMetafieldsCount: counts.skippedMissingMetafieldsCount,
+      failedCount: counts.failedCount,
+      statusMessage: counts.statusMessage ?? null,
+      results: {
+        aggregatedFromProductSync: true,
+      },
+    },
+  });
+}
+
 export async function listSyncJobs(
   shop: string,
   limit = 20,
