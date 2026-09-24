@@ -2,8 +2,7 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 
-const SYNC_BATCH_SIZE = 50;
-const MAX_VISIBLE_LOGS = 40;
+const MAX_VISIBLE_LOGS = 50;
 
 export default async () => {
   render(<Extension />, document.body);
@@ -31,32 +30,51 @@ function mergeSummary(target, batch) {
   }
 }
 
-async function fetchSyncJson(url) {
-  const response = await fetch(url);
-  const contentType = response.headers.get("content-type") ?? "";
-  const responseText = await response.text();
+function flushUi() {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
 
-  if (!contentType.includes("application/json")) {
-    throw new Error(
-      response.ok
-        ? "Unexpected sync response format."
-        : `Sync request failed (${response.status}).`,
-    );
-  }
-
-  let json;
+async function fetchSyncJson(url, onHeartbeat) {
+  const startedAt = Date.now();
+  const heartbeat = onHeartbeat
+    ? setInterval(() => {
+        onHeartbeat(Math.floor((Date.now() - startedAt) / 1000));
+      }, 2000)
+    : null;
 
   try {
-    json = responseText ? JSON.parse(responseText) : {};
-  } catch {
-    throw new Error("Sync response was not valid JSON.");
-  }
+    const response = await fetch(url);
+    const contentType = response.headers.get("content-type") ?? "";
+    const responseText = await response.text();
 
-  if (!response.ok || !json.ok) {
-    throw new Error(json.error ?? "Sync failed.");
-  }
+    if (!contentType.includes("application/json")) {
+      throw new Error(
+        response.ok
+          ? "Unexpected sync response format."
+          : `Sync request failed (${response.status}).`,
+      );
+    }
 
-  return json;
+    let json;
+
+    try {
+      json = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      throw new Error("Sync response was not valid JSON.");
+    }
+
+    if (!response.ok || !json.ok) {
+      throw new Error(json.error ?? "Sync failed.");
+    }
+
+    return json;
+  } finally {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+  }
 }
 
 function Extension() {
@@ -66,12 +84,14 @@ function Extension() {
   const [loadingProduct, setLoadingProduct] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [productTitle, setProductTitle] = useState("");
-  const [skuCount, setSkuCount] = useState(0);
+  const [skuList, setSkuList] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [syncError, setSyncError] = useState("");
   const [progressMessage, setProgressMessage] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
   const [result, setResult] = useState(null);
+
+  const skuCount = skuList.length;
 
   function appendLogs(messages) {
     if (!messages.length) {
@@ -115,12 +135,28 @@ function Extension() {
           return;
         }
 
-        const skus = (product.variants?.nodes ?? [])
-          .map((variant) => variant.sku?.trim())
-          .filter(Boolean);
+        const seen = new Set();
+        const skus = [];
+
+        for (const variant of product.variants?.nodes ?? []) {
+          const sku = variant.sku?.trim();
+
+          if (!sku) {
+            continue;
+          }
+
+          const key = sku.toLowerCase();
+
+          if (seen.has(key)) {
+            continue;
+          }
+
+          seen.add(key);
+          skus.push(sku);
+        }
 
         setProductTitle(product.title ?? "");
-        setSkuCount(new Set(skus.map((sku) => sku.toLowerCase())).size);
+        setSkuList(skus);
       } catch (loadError) {
         setLoadError(
           loadError instanceof Error
@@ -134,50 +170,56 @@ function Extension() {
   }, [productId]);
 
   async function runSync() {
-    if (!productId || syncing) {
+    if (!productId || syncing || skuList.length === 0) {
       return;
     }
 
-    const batchCount = Math.max(1, Math.ceil(skuCount / SYNC_BATCH_SIZE));
     const merged = emptySummary();
+    merged.variantsRequested = skuList.length;
 
     setSyncing(true);
     setSyncError("");
     setProgressMessage("Starting sync...");
     setSyncLogs([]);
-    appendLogs([`Starting sync for ${skuCount} variant SKUs.`]);
+    appendLogs([`Starting sync for ${skuList.length} variant SKUs.`]);
+    await flushUi();
 
     try {
-      for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
-        setProgressMessage(
-          `Processing batch ${batchIndex + 1} of ${batchCount}...`,
-        );
-        appendLogs([`Batch ${batchIndex + 1} of ${batchCount} started.`]);
+      for (let index = 0; index < skuList.length; index += 1) {
+        const sku = skuList[index];
+        const position = index + 1;
+
+        setProgressMessage(`Processing ${position} of ${skuList.length}: ${sku}`);
+        appendLogs([`Checking ${sku} (${position}/${skuList.length})...`]);
+        await flushUi();
 
         const params = new URLSearchParams({
           productId,
-          batch: String(batchIndex),
+          skus: sku,
         });
 
         const json = await fetchSyncJson(
           `/api/sync-product?${params.toString()}`,
+          (elapsedSeconds) => {
+            setProgressMessage(
+              `Processing ${position} of ${skuList.length}: ${sku} (${elapsedSeconds}s)`,
+            );
+          },
         );
-        mergeSummary(merged, json.summary);
-        appendLogs(json.logs ?? []);
 
-        appendLogs([
-          `Batch ${batchIndex + 1} complete: synced ${json.summary.synced.length}, skipped ${json.summary.skippedHasImage.length + json.summary.skippedMissingMetafields.length}, failed ${json.summary.failed.length}.`,
-        ]);
+        mergeSummary(merged, json.summary);
+        appendLogs(json.logs ?? [`Finished ${sku}.`]);
+        await flushUi();
       }
 
-      if (batchCount > 1) {
-        merged.statusMessage = `Processed ${skuCount} SKUs in ${batchCount} batches of up to ${SYNC_BATCH_SIZE}.`;
+      if (skuList.length > 1) {
+        merged.statusMessage = `Processed ${skuList.length} SKUs one at a time.`;
       }
 
       const historyParams = new URLSearchParams({
         productId,
         historyOnly: "1",
-        variantsRequested: String(skuCount),
+        variantsRequested: String(skuList.length),
         syncedCount: String(merged.synced.length),
         skippedHasImageCount: String(merged.skippedHasImage.length),
         skippedMissingMetafieldsCount: String(
@@ -236,7 +278,7 @@ function Extension() {
             ) : null}
             {syncing && syncLogs.length > 0 ? (
               <s-stack direction="block" gap="small">
-                {syncLogs.map((log, index) => (
+                {syncLogs.slice(-12).map((log, index) => (
                   <s-text key={`${index}-${log}`} tone="neutral">
                     {log}
                   </s-text>

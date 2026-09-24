@@ -10,8 +10,10 @@ import {
 } from "../lib/sync-history.server";
 import {
   buildBatchProgressLogs,
+  parseSkuList,
   syncCylindoVariantImagesByProductId,
   syncCylindoVariantImagesByProductIdBatch,
+  syncCylindoVariantImagesBySkuList,
   truncateSyncSummaryForClient,
 } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
@@ -113,6 +115,55 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       }
 
       return cors(json({ ok: true as const }));
+    }
+
+    const skusParam = url.searchParams.get("skus");
+
+    if (skusParam !== null) {
+      const skus = parseSkuList(skusParam);
+
+      if (skus.length === 0) {
+        return cors(
+          json({
+            ok: false as const,
+            error: "Provide at least one SKU",
+          }),
+        );
+      }
+
+      if (skus.length > 10) {
+        return cors(
+          json({
+            ok: false as const,
+            error: "Sync up to 10 SKUs per request",
+          }),
+        );
+      }
+
+      const summary = truncateSyncSummaryForClient(
+        await syncCylindoVariantImagesBySkuList(admin, skus),
+        skus.length,
+      );
+      const logs = buildBatchProgressLogs(summary);
+
+      if (
+        summary.statusMessage &&
+        summary.synced.length === 0 &&
+        summary.failed.length === 0 &&
+        summary.skippedHasImage.length === 0 &&
+        summary.skippedMissingMetafields.length === 0
+      ) {
+        return cors(
+          json({
+            ok: false as const,
+            error: summary.statusMessage,
+            summary,
+            logs,
+          }),
+        );
+      }
+
+      return cors(json({ ok: true as const, summary, logs }));
     }
 
     if (batchParam !== null) {
