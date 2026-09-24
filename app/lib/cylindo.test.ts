@@ -5,6 +5,8 @@ import {
   buildCylindoFrameUrlForVariant,
   buildFeaturePairs,
   parseFeaturesCode,
+  parseProductMetafields,
+  unwrapMetafieldValue,
 } from "./cylindo";
 
 const config = {
@@ -55,5 +57,27 @@ if (built.ok) {
 
 const missing = buildCylindoFrameUrlForVariant(config, productMetafields, []);
 assert.equal(missing.ok, false);
+
+assert.equal(unwrapMetafieldValue('["BACK"]'), "BACK");
+assert.equal(unwrapMetafieldValue('["FINISH"]'), "FINISH");
+
+const jsonWrappedProductMetafields = parseProductMetafields([
+  { key: "product_code", value: "FRMDSEC_3" },
+  { key: "variant_option1_name", value: '["BACK"]' },
+  { key: "variant_option2_name", value: '["FINISH"]' },
+]);
+
+const jsonWrappedBuilt = buildCylindoFrameUrlForVariant(
+  config,
+  jsonWrappedProductMetafields,
+  ["BLISS_OATMEAL", "WOOD_BLACK"],
+);
+assert.equal(jsonWrappedBuilt.ok, true);
+
+if (jsonWrappedBuilt.ok) {
+  assert.match(jsonWrappedBuilt.url, /feature=BACK%3ABLISS_OATMEAL/);
+  assert.match(jsonWrappedBuilt.url, /feature=FINISH%3AWOOD_BLACK/);
+  assert.doesNotMatch(jsonWrappedBuilt.url, /%5B%22BACK%22%5D/);
+}
 
 console.log("cylindo.test.ts passed");

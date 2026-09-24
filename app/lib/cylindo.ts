@@ -22,18 +22,48 @@ export function parseProductMetafields(
 
   for (const metafield of metafields) {
     if (metafield.value != null) {
-      map[metafield.key] = metafield.value;
+      map[metafield.key] = unwrapMetafieldValue(metafield.value);
     }
   }
 
   return map;
 }
 
+export function unwrapMetafieldValue(value: string): string {
+  const trimmed = value.trim();
+
+  if (!trimmed.startsWith("[") && !trimmed.startsWith("{") && !trimmed.startsWith('"')) {
+    return trimmed;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    if (Array.isArray(parsed)) {
+      if (parsed.length === 1 && typeof parsed[0] === "string") {
+        return parsed[0].trim();
+      }
+
+      if (parsed.every((item) => typeof item === "string") && parsed.length > 0) {
+        return parsed[0].trim();
+      }
+    }
+
+    if (typeof parsed === "string") {
+      return parsed.trim();
+    }
+  } catch {
+    // Fall back to the raw metafield string.
+  }
+
+  return trimmed;
+}
+
 export function parseFeaturesCode(jsonValue: unknown): string[] {
   if (Array.isArray(jsonValue)) {
     return jsonValue
       .filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim())
+      .map((value) => unwrapMetafieldValue(value))
       .filter(Boolean);
   }
 
@@ -41,12 +71,39 @@ export function parseFeaturesCode(jsonValue: unknown): string[] {
     try {
       return parseFeaturesCode(JSON.parse(jsonValue));
     } catch {
-      const trimmed = jsonValue.trim();
+      const trimmed = unwrapMetafieldValue(jsonValue);
       return trimmed ? [trimmed] : [];
     }
   }
 
   return [];
+}
+
+function tryParsePairedFeaturesCode(featuresCode: string[]): FeaturePair[] | null {
+  if (featuresCode.length === 0) {
+    return null;
+  }
+
+  const pairs: FeaturePair[] = [];
+
+  for (const entry of featuresCode) {
+    const colonIndex = entry.indexOf(":");
+
+    if (colonIndex <= 0) {
+      return null;
+    }
+
+    const name = unwrapMetafieldValue(entry.slice(0, colonIndex));
+    const code = unwrapMetafieldValue(entry.slice(colonIndex + 1));
+
+    if (!name || !code) {
+      return null;
+    }
+
+    pairs.push({ name, code });
+  }
+
+  return pairs;
 }
 
 export function buildFeaturePairs(
@@ -108,7 +165,7 @@ export function buildCylindoFrameUrlForVariant(
     return { ok: false, reason: "Missing product metafield cylindo.product_code" };
   }
 
-  const pairs = buildFeaturePairs(productMetafields, featuresCode);
+  const pairs = buildFeaturePairsFromMetafields(productMetafields, featuresCode);
 
   if (!pairs) {
     return {
@@ -122,6 +179,19 @@ export function buildCylindoFrameUrlForVariant(
     url: buildCylindoFrameUrl(config, productCode, pairs),
     pairs,
   };
+}
+
+export function buildFeaturePairsFromMetafields(
+  productMetafields: Record<string, string>,
+  featuresCode: string[],
+): FeaturePair[] | null {
+  const pairedFromCodes = tryParsePairedFeaturesCode(featuresCode);
+
+  if (pairedFromCodes) {
+    return pairedFromCodes;
+  }
+
+  return buildFeaturePairs(productMetafields, featuresCode);
 }
 
 export async function validateCylindoImageUrl(url: string): Promise<boolean> {
