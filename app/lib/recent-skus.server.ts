@@ -9,9 +9,9 @@ export type RecentSku = {
   hasImage: boolean;
 };
 
-const RECENT_VARIANTS_QUERY = `#graphql
-  query CylindoRecentVariants($query: String!, $cursor: String) {
-    productVariants(first: 250, after: $cursor, query: $query) {
+const RECENT_VARIANTS_BY_ID_QUERY = `#graphql
+  query CylindoRecentVariantsById($cursor: String) {
+    productVariants(first: 100, after: $cursor, sortKey: ID, reverse: true) {
       pageInfo {
         hasNextPage
         endCursor
@@ -32,7 +32,7 @@ const RECENT_VARIANTS_QUERY = `#graphql
 
 const RECENT_PRODUCTS_QUERY = `#graphql
   query CylindoRecentProducts($query: String!, $cursor: String) {
-    products(first: 50, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
+    products(first: 25, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
       pageInfo {
         hasNextPage
         endCursor
@@ -54,18 +54,16 @@ const RECENT_PRODUCTS_QUERY = `#graphql
   }
 `;
 
+const DEFAULT_DAYS = 30;
+const DEFAULT_MAX_RESULTS = 200;
+const MAX_ID_SCAN_PAGES = 5;
+const MAX_PRODUCT_PAGES = 2;
+
 export function getRecentSkuCutoffDate(days: number): Date {
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - days);
   since.setUTCHours(0, 0, 0, 0);
   return since;
-}
-
-export function buildRecentVariantSearchQuery(days: number): string {
-  const dateFilter = getRecentSkuCutoffDate(days).toISOString().slice(0, 10);
-
-  // productVariants search supports updated_at, not created_at.
-  return `updated_at:>=${dateFilter}`;
 }
 
 export function buildRecentProductSearchQuery(days: number): string {
@@ -92,21 +90,18 @@ function upsertRecentSku(
   }
 }
 
-async function fetchRecentVariantsByUpdatedAt(
+async function fetchRecentVariantsByIdScan(
   admin: { graphql: AdminGraphql },
   days: number,
   maxResults: number,
   results: Map<string, RecentSku>,
 ): Promise<void> {
-  const query = buildRecentVariantSearchQuery(days);
   let cursor: string | null = null;
+  let stalePages = 0;
 
-  while (results.size < maxResults) {
-    const response = await admin.graphql(RECENT_VARIANTS_QUERY, {
-      variables: {
-        query,
-        cursor,
-      },
+  for (let page = 0; page < MAX_ID_SCAN_PAGES && results.size < maxResults; page++) {
+    const response = await admin.graphql(RECENT_VARIANTS_BY_ID_QUERY, {
+      variables: { cursor },
     });
 
     const json = (await response.json()) as {
@@ -128,13 +123,12 @@ async function fetchRecentVariantsByUpdatedAt(
     };
 
     if (json.errors?.length) {
-      throw new Error(
-        json.errors.map((error) => error.message).join("; "),
-      );
+      throw new Error(json.errors.map((error) => error.message).join("; "));
     }
 
     const connection = json.data?.productVariants;
     const nodes = connection?.nodes ?? [];
+    let pageHasRecentVariant = false;
 
     for (const node of nodes) {
       const sku = node.sku?.trim();
@@ -142,6 +136,8 @@ async function fetchRecentVariantsByUpdatedAt(
       if (!sku || !isCreatedWithinDays(node.createdAt, days)) {
         continue;
       }
+
+      pageHasRecentVariant = true;
 
       upsertRecentSku(results, {
         sku,
@@ -153,6 +149,12 @@ async function fetchRecentVariantsByUpdatedAt(
       if (results.size >= maxResults) {
         return;
       }
+    }
+
+    stalePages = pageHasRecentVariant ? 0 : stalePages + 1;
+
+    if (stalePages >= 2) {
+      break;
     }
 
     if (!connection?.pageInfo?.hasNextPage || !connection.pageInfo.endCursor) {
@@ -172,7 +174,7 @@ async function fetchRecentVariantsFromNewProducts(
   const query = buildRecentProductSearchQuery(days);
   let cursor: string | null = null;
 
-  while (results.size < maxResults) {
+  for (let page = 0; page < MAX_PRODUCT_PAGES && results.size < maxResults; page++) {
     const response = await admin.graphql(RECENT_PRODUCTS_QUERY, {
       variables: {
         query,
@@ -204,9 +206,7 @@ async function fetchRecentVariantsFromNewProducts(
     };
 
     if (json.errors?.length) {
-      throw new Error(
-        json.errors.map((error) => error.message).join("; "),
-      );
+      throw new Error(json.errors.map((error) => error.message).join("; "));
     }
 
     const connection = json.data?.products;
@@ -243,13 +243,13 @@ async function fetchRecentVariantsFromNewProducts(
 
 export async function fetchRecentVariantSkus(
   admin: { graphql: AdminGraphql },
-  days = 30,
-  maxResults = 500,
+  days = DEFAULT_DAYS,
+  maxResults = DEFAULT_MAX_RESULTS,
 ): Promise<RecentSku[]> {
   const results = new Map<string, RecentSku>();
 
   await Promise.all([
-    fetchRecentVariantsByUpdatedAt(admin, days, maxResults, results),
+    fetchRecentVariantsByIdScan(admin, days, maxResults, results),
     fetchRecentVariantsFromNewProducts(admin, days, maxResults, results),
   ]);
 

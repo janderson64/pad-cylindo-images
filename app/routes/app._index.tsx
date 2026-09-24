@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import {
@@ -25,7 +25,7 @@ import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
-import { fetchRecentVariantSkus } from "../lib/recent-skus.server";
+import type { RecentSku } from "../lib/recent-skus.server";
 import { listSyncJobs } from "../lib/sync-history.server";
 import type { SyncSummary } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
@@ -34,8 +34,12 @@ type ActionData =
   | { ok: true; summary: SyncSummary }
   | { ok: false; error: string; summary?: SyncSummary };
 
+type RecentSkusData =
+  | { ok: true; recentSkus: RecentSku[] }
+  | { ok: false; error: string };
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
   let configSummary: Record<string, string | number> | null = null;
   let configError: string | null = null;
@@ -54,31 +58,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   let syncHistory: Awaited<ReturnType<typeof listSyncJobs>> = [];
-  let recentSkus: Awaited<ReturnType<typeof fetchRecentVariantSkus>> = [];
-  let recentSkusError: string | null = null;
 
-  const [syncHistoryResult, recentSkusResult] = await Promise.allSettled([
-    listSyncJobs(session.shop),
-    fetchRecentVariantSkus(admin),
-  ]);
-
-  if (syncHistoryResult.status === "fulfilled") {
-    syncHistory = syncHistoryResult.value;
-  } else {
-    console.error("Failed to load sync history:", syncHistoryResult.reason);
+  try {
+    syncHistory = await listSyncJobs(session.shop);
+  } catch (error) {
+    console.error("Failed to load sync history:", error);
   }
 
-  if (recentSkusResult.status === "fulfilled") {
-    recentSkus = recentSkusResult.value;
-  } else {
-    recentSkusError =
-      recentSkusResult.reason instanceof Error
-        ? recentSkusResult.reason.message
-        : "Failed to load recently added SKUs";
-    console.error("Failed to load recent SKUs:", recentSkusResult.reason);
-  }
-
-  return json({ configSummary, configError, syncHistory, recentSkus, recentSkusError });
+  return json({ configSummary, configError, syncHistory });
 };
 
 export function shouldRevalidate({
@@ -138,13 +125,31 @@ function buildLogRows(summary: SyncSummary) {
 
 export default function Index() {
   const fetcher = useFetcher<ActionData>();
+  const recentSkusFetcher = useFetcher<RecentSkusData>();
   const revalidator = useRevalidator();
-  const { configSummary, configError, syncHistory, recentSkus, recentSkusError } =
-    useLoaderData<typeof loader>();
+  const { configSummary, configError, syncHistory } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
 
+  const recentSkus =
+    recentSkusFetcher.data?.ok === true ? recentSkusFetcher.data.recentSkus : [];
+  const recentSkusError =
+    recentSkusFetcher.data?.ok === false ? recentSkusFetcher.data.error : null;
+  const recentSkusLoading =
+    recentSkusFetcher.state === "loading" ||
+    (recentSkusFetcher.state === "idle" && !recentSkusFetcher.data);
   const recentSkuList = recentSkus.map((item) => item.sku).join("\n");
+  const recentSkusRequested = useRef(false);
+
+  useEffect(() => {
+    if (recentSkusRequested.current) {
+      return;
+    }
+
+    recentSkusRequested.current = true;
+    const params = new URLSearchParams(window.location.search);
+    recentSkusFetcher.load(`/app/recent-skus?${params.toString()}`);
+  }, [recentSkusFetcher]);
 
   const isLoading =
     ["loading", "submitting"].includes(fetcher.state) &&
@@ -405,7 +410,11 @@ export default function Index() {
                 <p>{recentSkusError}</p>
               </Banner>
             )}
-            {recentSkus.length > 0 ? (
+            {recentSkusLoading ? (
+              <Text as="p" variant="bodyMd">
+                Loading recently added SKUs...
+              </Text>
+            ) : recentSkus.length > 0 ? (
               <>
                 <TextField
                   label="SKU list"
