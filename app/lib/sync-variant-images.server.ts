@@ -73,6 +73,23 @@ const VARIANT_BY_SKU_QUERY = `#graphql
   }
 `;
 
+const PRODUCT_VARIANT_SKUS_QUERY = `#graphql
+  query CylindoProductVariantSkus($id: ID!, $cursor: String) {
+    product(id: $id) {
+      title
+      variants(first: 100, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          sku
+        }
+      }
+    }
+  }
+`;
+
 const CREATE_MEDIA_MUTATION = `#graphql
   mutation CylindoProductCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
     productCreateMedia(productId: $productId, media: $media) {
@@ -293,6 +310,85 @@ async function fetchVariantBySku(
   return json.data?.productVariants?.nodes?.[0] ?? null;
 }
 
+async function fetchProductVariantSkus(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+): Promise<{ productTitle: string; skus: string[] }> {
+  const skus: string[] = [];
+  const seen = new Set<string>();
+  let productTitle = "";
+  let cursor: string | null = null;
+
+  while (true) {
+    const response = await admin.graphql(PRODUCT_VARIANT_SKUS_QUERY, {
+      variables: {
+        id: productId,
+        cursor,
+      },
+    });
+
+    const json = (await response.json()) as {
+      errors?: Array<{ message?: string }>;
+      data?: {
+        product?: {
+          title?: string;
+          variants?: {
+            pageInfo?: {
+              hasNextPage?: boolean;
+              endCursor?: string | null;
+            };
+            nodes?: Array<{ sku: string | null }>;
+          };
+        };
+      };
+    };
+
+    if (json.errors?.length) {
+      throw new Error(
+        json.errors
+          .map((error) => error.message ?? "GraphQL error")
+          .join("; "),
+      );
+    }
+
+    const product = json.data?.product;
+
+    if (!product) {
+      throw new Error("Product not found");
+    }
+
+    productTitle = product.title ?? productTitle;
+
+    for (const variant of product.variants?.nodes ?? []) {
+      const sku = variant.sku?.trim();
+
+      if (!sku) {
+        continue;
+      }
+
+      const key = sku.toLowerCase();
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      skus.push(sku);
+    }
+
+    if (
+      !product.variants?.pageInfo?.hasNextPage ||
+      !product.variants.pageInfo.endCursor
+    ) {
+      break;
+    }
+
+    cursor = product.variants.pageInfo.endCursor;
+  }
+
+  return { productTitle, skus };
+}
+
 async function syncVariant(
   admin: { graphql: AdminGraphql },
   variant: VariantLookup,
@@ -413,20 +509,14 @@ async function syncSkuBatch(
   return summary;
 }
 
-export async function syncCylindoVariantImagesBySkus(
+export async function syncCylindoVariantImagesBySkuList(
   admin: { graphql: AdminGraphql },
-  skusInput: string,
+  skus: string[],
 ): Promise<SyncSummary> {
-  const skus = parseSkuList(skusInput);
-
   if (skus.length === 0) {
     const summary = emptySummary();
-    summary.statusMessage = "Enter at least one variant SKU to sync.";
+    summary.statusMessage = "No variant SKUs to sync.";
     return summary;
-  }
-
-  if (skus.length > MAX_SKUS_PER_SYNC) {
-    throw new Error(`Too many SKUs. Sync up to ${MAX_SKUS_PER_SYNC} at a time.`);
   }
 
   const summary: SyncSummary = {
@@ -447,6 +537,39 @@ export async function syncCylindoVariantImagesBySkus(
   }
 
   return summary;
+}
+
+export async function syncCylindoVariantImagesByProductId(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+): Promise<SyncSummary> {
+  const { productTitle, skus } = await fetchProductVariantSkus(admin, productId);
+  const summary = await syncCylindoVariantImagesBySkuList(admin, skus);
+
+  if (summary.statusMessage === "No variant SKUs to sync.") {
+    summary.statusMessage = `${productTitle} has no variant SKUs to sync.`;
+  }
+
+  return summary;
+}
+
+export async function syncCylindoVariantImagesBySkus(
+  admin: { graphql: AdminGraphql },
+  skusInput: string,
+): Promise<SyncSummary> {
+  const skus = parseSkuList(skusInput);
+
+  if (skus.length === 0) {
+    const summary = emptySummary();
+    summary.statusMessage = "Enter at least one variant SKU to sync.";
+    return summary;
+  }
+
+  if (skus.length > MAX_SKUS_PER_SYNC) {
+    throw new Error(`Too many SKUs. Sync up to ${MAX_SKUS_PER_SYNC} at a time.`);
+  }
+
+  return syncCylindoVariantImagesBySkuList(admin, skus);
 }
 
 export function truncateSyncSummaryForClient(
