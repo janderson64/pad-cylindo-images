@@ -22,7 +22,11 @@ export type SyncSummary = {
   skippedMissingMetafields: SyncLogEntry[];
   failed: SyncLogEntry[];
   productsScanned: number;
+  timedOut?: boolean;
+  statusMessage?: string;
 };
+
+const MAX_SYNC_MS = 55_000;
 
 type AdminGraphql = AdminApiContext["admin"]["graphql"];
 
@@ -271,6 +275,15 @@ async function fetchProductsPage(
     variables: { cursor },
   });
   const json = await response.json();
+
+  if (Array.isArray(json.errors) && json.errors.length > 0) {
+    throw new Error(
+      json.errors
+        .map((error: { message?: string }) => error.message ?? "GraphQL error")
+        .join("; "),
+    );
+  }
+
   const products = json.data?.products;
 
   return {
@@ -280,9 +293,15 @@ async function fetchProductsPage(
   };
 }
 
-export async function syncCylindoVariantImages(admin: {
-  graphql: AdminGraphql;
-}): Promise<SyncSummary> {
+export async function syncCylindoVariantImages(
+  admin: {
+    graphql: AdminGraphql;
+  },
+  options?: { deadlineMs?: number },
+): Promise<SyncSummary> {
+  const deadlineMs = options?.deadlineMs ?? MAX_SYNC_MS;
+  const startedAt = Date.now();
+
   const summary: SyncSummary = {
     synced: [],
     skippedHasImage: [],
@@ -295,9 +314,23 @@ export async function syncCylindoVariantImages(admin: {
   let hasNextPage = true;
 
   while (hasNextPage) {
+    if (Date.now() - startedAt > deadlineMs) {
+      summary.timedOut = true;
+      summary.statusMessage =
+        "Sync stopped early to avoid a request timeout. Run sync again to continue.";
+      break;
+    }
+
     const page = await fetchProductsPage(admin, cursor);
 
     for (const product of page.nodes) {
+      if (Date.now() - startedAt > deadlineMs) {
+        summary.timedOut = true;
+        summary.statusMessage =
+          "Sync stopped early to avoid a request timeout. Run sync again to continue.";
+        return summary;
+      }
+
       summary.productsScanned += 1;
       await syncProductVariants(admin, product, summary);
     }
@@ -307,4 +340,17 @@ export async function syncCylindoVariantImages(admin: {
   }
 
   return summary;
+}
+
+export function truncateSyncSummaryForClient(
+  summary: SyncSummary,
+  limit = 100,
+): SyncSummary {
+  return {
+    ...summary,
+    synced: summary.synced.slice(0, limit),
+    skippedHasImage: summary.skippedHasImage.slice(0, limit),
+    skippedMissingMetafields: summary.skippedMissingMetafields.slice(0, limit),
+    failed: summary.failed.slice(0, limit),
+  };
 }

@@ -1,6 +1,12 @@
-import { useEffect } from "react";
-import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { useCallback, useEffect, useState } from "react";
+import type {
+  ActionFunctionArgs,
+  HeadersFunction,
+  LoaderFunctionArgs,
+  ShouldRevalidateFunctionArgs,
+} from "@remix-run/node";
+import { json } from "@remix-run/node";
+import { useLoaderData, useRouteError } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -17,8 +23,16 @@ import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { getCylindoConfig } from "../lib/cylindo-config.server";
-import { syncCylindoVariantImages, type SyncSummary } from "../lib/sync-variant-images.server";
+import {
+  syncCylindoVariantImages,
+  truncateSyncSummaryForClient,
+  type SyncSummary,
+} from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
+
+type ActionData =
+  | { ok: true; summary: SyncSummary }
+  | { ok: false; error: string; summary?: SyncSummary };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -39,42 +53,80 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       error instanceof Error ? error.message : "Missing Cylindo configuration";
   }
 
-  return { configSummary, configError };
+  return json({ configSummary, configError });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  let admin;
+
+  try {
+    ({ admin } = await authenticate.admin(request));
+  } catch (error) {
+    console.error("Sync action authentication failed:", error);
+    throw error;
+  }
+
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "ping") {
+    return json({ ok: true as const, summary: emptySummary("App connection OK") });
+  }
 
   try {
     getCylindoConfig();
   } catch (error) {
-    return {
+    return json({
       ok: false as const,
       error:
         error instanceof Error ? error.message : "Missing Cylindo configuration",
-    };
+    });
   }
 
   try {
-    const summary = await syncCylindoVariantImages(admin);
-    return { ok: true as const, summary };
+    const summary = truncateSyncSummaryForClient(
+      await syncCylindoVariantImages(admin),
+    );
+
+    if (summary.timedOut) {
+      return json({
+        ok: false as const,
+        error:
+          summary.statusMessage ??
+          "Sync stopped early to avoid a request timeout. Run sync again to continue.",
+        summary,
+      });
+    }
+
+    return json({ ok: true as const, summary });
   } catch (error) {
     console.error("Cylindo sync failed:", error);
 
     if (error instanceof Response) {
       const body = await error.text().catch(() => "");
-      return {
+      return json({
         ok: false as const,
         error: `Shopify API error (${error.status}): ${body || error.statusText}`,
-      };
+      });
     }
 
-    return {
+    return json({
       ok: false as const,
       error: error instanceof Error ? error.message : "Unexpected sync error",
-    };
+    });
   }
 };
+
+export function shouldRevalidate({
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (formMethod === "POST") {
+    return false;
+  }
+
+  return defaultShouldRevalidate;
+}
 
 export function ErrorBoundary() {
   return boundary.error(useRouteError());
@@ -84,17 +136,21 @@ export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
 
-type ActionData =
-  | { ok: true; summary: SyncSummary }
-  | { ok: false; error: string };
+function emptySummary(statusMessage: string): SyncSummary {
+  return {
+    synced: [],
+    skippedHasImage: [],
+    skippedMissingMetafields: [],
+    failed: [],
+    productsScanned: 0,
+    statusMessage,
+  };
+}
 
 function buildLogRows(summary: SyncSummary) {
   const rows: Array<[string, string, string, string]> = [];
 
-  const append = (
-    items: SyncSummary["synced"],
-    status: string,
-  ) => {
+  const append = (items: SyncSummary["synced"], status: string) => {
     for (const item of items) {
       rows.push([
         status,
@@ -113,48 +169,109 @@ function buildLogRows(summary: SyncSummary) {
   return rows;
 }
 
+async function postAppAction(
+  getIdToken: () => Promise<string>,
+  body: URLSearchParams,
+): Promise<{ response: Response; data: ActionData | null }> {
+  const params = new URLSearchParams(window.location.search);
+  const token = await getIdToken();
+
+  params.set("id_token", token);
+
+  const response = await fetch(`${window.location.pathname}?${params.toString()}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+    },
+    body: body.toString(),
+  });
+
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    throw new Error(
+      `Unexpected response (${response.status}). ${text.slice(0, 200)}`,
+    );
+  }
+
+  return {
+    response,
+    data: (await response.json()) as ActionData,
+  };
+}
+
 export default function Index() {
-  const fetcher = useFetcher<ActionData>();
   const { configSummary, configError } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
+  const [actionData, setActionData] = useState<ActionData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
 
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const runAction = useCallback(
+    async (intent: "sync" | "ping") => {
+      setIsLoading(true);
+      setRequestError(null);
 
-  const runSync = async () => {
-    const params = new URLSearchParams(window.location.search);
+      try {
+        const body = new URLSearchParams();
+        body.set("intent", intent);
 
-    try {
-      const token = await shopify.idToken();
-      params.set("id_token", token);
-    } catch (error) {
-      shopify.toast.show(
-        error instanceof Error ? error.message : "Could not get session token",
-        { isError: true },
-      );
-      return;
-    }
+        const { response, data } = await postAppAction(() => shopify.idToken(), body);
 
-    fetcher.submit({}, { method: "POST", action: `/app?${params.toString()}` });
-  };
+        if (!response.ok) {
+          throw new Error(
+            data?.ok === false
+              ? data.error
+              : `Request failed with status ${response.status}`,
+          );
+        }
+
+        if (!data) {
+          throw new Error("Sync returned an empty response.");
+        }
+
+        setActionData(data);
+
+        if (data.ok) {
+          shopify.toast.show(
+            intent === "ping"
+              ? "Connection OK"
+              : `Sync complete: ${data.summary.synced.length} synced`,
+          );
+        } else {
+          shopify.toast.show(data.error, { isError: true });
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Sync request failed";
+        setRequestError(message);
+        shopify.toast.show(message, { isError: true });
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [shopify],
+  );
 
   useEffect(() => {
-    if (fetcher.data?.ok) {
-      shopify.toast.show(
-        `Sync complete: ${fetcher.data.summary.synced.length} synced`,
-      );
-    } else if (fetcher.data && !fetcher.data.ok) {
-      shopify.toast.show(fetcher.data.error, { isError: true });
-    }
-  }, [fetcher.data, shopify]);
+    void runAction("ping");
+  }, []);
 
-  const summary = fetcher.data?.ok ? fetcher.data.summary : null;
+  const summary =
+    actionData && (actionData.ok || actionData.summary) ? actionData.summary : null;
+  const syncDisabled = Boolean(configError) || isLoading;
 
   return (
     <Page>
       <TitleBar title="Cylindo Variant Images">
-        <button variant="primary" onClick={() => void runSync()} disabled={isLoading || Boolean(configError)}>
+        <button
+          variant="primary"
+          onClick={() => void runAction("sync")}
+          disabled={syncDisabled}
+        >
           Sync Cylindo variant images
         </button>
       </TitleBar>
@@ -177,12 +294,17 @@ export default function Index() {
                     <p>{configError}</p>
                   </Banner>
                 )}
+                {requestError && (
+                  <Banner tone="critical" title="Request failed">
+                    <p>{requestError}</p>
+                  </Banner>
+                )}
                 <InlineStack gap="300">
                   <Button
                     variant="primary"
                     loading={isLoading}
-                    onClick={runSync}
-                    disabled={Boolean(configError)}
+                    onClick={() => void runAction("sync")}
+                    disabled={syncDisabled}
                   >
                     Sync Cylindo variant images
                   </Button>
@@ -215,9 +337,9 @@ export default function Index() {
           </Layout.Section>
         </Layout>
 
-        {fetcher.data && !fetcher.data.ok && (
+        {actionData && !actionData.ok && (
           <Banner tone="critical" title="Sync failed">
-            <p>{fetcher.data.error}</p>
+            <p>{actionData.error}</p>
           </Banner>
         )}
 
@@ -227,6 +349,11 @@ export default function Index() {
               <Text as="h2" variant="headingMd">
                 Sync results
               </Text>
+              {summary.statusMessage && (
+                <Banner tone="info">
+                  <p>{summary.statusMessage}</p>
+                </Banner>
+              )}
               <InlineStack gap="400">
                 <Text as="span" variant="bodyMd">
                   Products scanned: {summary.productsScanned}

@@ -1,4 +1,4 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
+import type { HeadersFunction, LoaderFunctionArgs, ShouldRevalidateFunctionArgs } from "@remix-run/node";
 import { Link, Outlet, useLoaderData, useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
@@ -14,6 +14,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
+
+export function shouldRevalidate({
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (formMethod === "POST") {
+    return false;
+  }
+
+  return defaultShouldRevalidate;
+}
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
