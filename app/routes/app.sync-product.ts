@@ -1,8 +1,4 @@
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "@remix-run/node";
+import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useRouteError, type ShouldRevalidateFunctionArgs } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
@@ -15,15 +11,9 @@ import {
 } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
 
-// Admin UI extensions send an OPTIONS preflight before POST. Remix only
-// invokes loaders for OPTIONS, so authenticate.admin must run here too.
+// Admin UI extensions call this route cross-origin. Use GET (Shopify's
+// recommended pattern) so Remix does not reject the request as CSRF.
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { cors } = await authenticate.admin(request);
-
-  return cors(json({ error: "Use POST" }, { status: 405 }));
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
   let admin;
   let session;
   let cors;
@@ -31,7 +21,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     ({ admin, session, cors } = await authenticate.admin(request));
   } catch (error) {
-    console.error("Sync product action authentication failed:", error);
+    console.error("Sync product loader authentication failed:", error);
     throw error;
   }
 
@@ -50,8 +40,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
-    const body = (await request.json()) as { productId?: string };
-    const productId = String(body.productId ?? "").trim();
+    const url = new URL(request.url);
+    const productId = String(url.searchParams.get("productId") ?? "").trim();
 
     if (!productId) {
       return cors(

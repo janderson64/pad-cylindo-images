@@ -79,13 +79,9 @@ function Extension() {
     setSyncError("");
 
     try {
-      const response = await fetch("/app/sync-product", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ productId }),
-      });
+      const response = await fetch(
+        `/app/sync-product?productId=${encodeURIComponent(productId)}`,
+      );
 
       const responseText = await response.text();
       let json;

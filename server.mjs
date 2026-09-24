@@ -21,7 +21,12 @@ function applyAdminExtensionCorsHeaders(request, response) {
   const origin = request.headers.origin;
   const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
 
-  if (!origin || origin === appUrl) {
+  if (
+    response.headersSent ||
+    response.getHeader("Access-Control-Allow-Origin") ||
+    !origin ||
+    origin === appUrl
+  ) {
     return false;
   }
 
@@ -50,16 +55,23 @@ app.use(express.static("public", { maxAge: "1h" }));
 app.use(morgan("tiny"));
 
 app.use((request, response, next) => {
-  if (
-    request.method !== "OPTIONS" ||
-    !ADMIN_EXTENSION_API_PATHS.has(request.path)
-  ) {
+  if (!ADMIN_EXTENSION_API_PATHS.has(request.path)) {
     next();
     return;
   }
 
-  applyAdminExtensionCorsHeaders(request, response);
-  response.status(204).end();
+  const originalEnd = response.end.bind(response);
+  response.end = (...args) => {
+    applyAdminExtensionCorsHeaders(request, response);
+    return originalEnd(...args);
+  };
+
+  if (request.method === "OPTIONS") {
+    response.status(204).end();
+    return;
+  }
+
+  next();
 });
 
 app.all(
