@@ -25,7 +25,10 @@ import { boundary } from "@shopify/shopify-app-remix/server";
 import { getCylindoConfig } from "../lib/cylindo-config.server";
 import type { RecentSku } from "../lib/recent-skus.server";
 import { listSyncJobs } from "../lib/sync-history.server";
-import type { SyncSummary } from "../lib/sync-variant-images.server";
+import {
+  MAX_SKUS_PER_SYNC,
+  type SyncSummary,
+} from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
 
 type ActionData =
@@ -244,7 +247,7 @@ export default function Index() {
               onChange={setSkuInput}
               multiline={4}
               autoComplete="off"
-              helpText="One SKU per line, or comma-separated. Up to 50 SKUs per sync."
+              helpText={`One SKU per line, or comma-separated. Up to ${MAX_SKUS_PER_SYNC} SKUs per sync (processed in batches of 50).`}
               placeholder={"FRMDSEC_3-BLISS\nFRMDSEC_3-WALNUT"}
             />
             {configError && (
@@ -366,8 +369,8 @@ export default function Index() {
               Recently added SKUs
             </Text>
             <Text as="p" variant="bodyMd">
-              Variants created in the last 30 days. Copy the list or load it
-              into the sync field above.
+              Variants created in the last 30 days that do not have an image yet.
+              Copy the list or load it into the sync field above.
             </Text>
             {recentSkusError && (
               <Banner tone="warning" title="Could not load recent SKUs">
@@ -418,19 +421,18 @@ export default function Index() {
                   </Button>
                 </InlineStack>
                 <DataTable
-                  columnContentTypes={["text", "text", "text", "text"]}
-                  headings={["SKU", "Product", "Created", "Has image"]}
+                  columnContentTypes={["text", "text", "text"]}
+                  headings={["SKU", "Product", "Created"]}
                   rows={recentSkus.map((item) => [
                     item.sku,
                     item.productTitle,
                     formatDateTime(item.createdAt),
-                    item.hasImage ? "Yes" : "No",
                   ])}
                 />
               </>
             ) : (
               <Text as="p" variant="bodyMd">
-                No variants with SKUs were created in the last 30 days.
+                No recent variants without images were found in the last 30 days.
               </Text>
             )}
           </BlockStack>

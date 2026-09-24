@@ -25,7 +25,10 @@ export type SyncSummary = {
   statusMessage?: string;
 };
 
-const MAX_SKUS_PER_SYNC = 50;
+const MAX_SKUS_PER_SYNC = 150;
+const SYNC_BATCH_SIZE = 50;
+
+export { MAX_SKUS_PER_SYNC, SYNC_BATCH_SIZE };
 
 type AdminGraphql = AdminApiContext["graphql"];
 
@@ -378,6 +381,38 @@ async function syncVariant(
   );
 }
 
+function mergeSummaries(target: SyncSummary, batch: SyncSummary): void {
+  target.synced.push(...batch.synced);
+  target.skippedHasImage.push(...batch.skippedHasImage);
+  target.skippedMissingMetafields.push(...batch.skippedMissingMetafields);
+  target.failed.push(...batch.failed);
+}
+
+async function syncSkuBatch(
+  admin: { graphql: AdminGraphql },
+  skus: string[],
+): Promise<SyncSummary> {
+  const summary = emptySummary();
+
+  for (const sku of skus) {
+    const variant = await fetchVariantBySku(admin, sku);
+
+    if (!variant) {
+      summary.failed.push({
+        productTitle: "(not found)",
+        sku,
+        variantId: "",
+        message: "No variant found with this SKU",
+      });
+      continue;
+    }
+
+    await syncVariant(admin, variant, summary);
+  }
+
+  return summary;
+}
+
 export async function syncCylindoVariantImagesBySkus(
   admin: { graphql: AdminGraphql },
   skusInput: string,
@@ -399,20 +434,16 @@ export async function syncCylindoVariantImagesBySkus(
     variantsRequested: skus.length,
   };
 
-  for (const sku of skus) {
-    const variant = await fetchVariantBySku(admin, sku);
+  const batchCount = Math.ceil(skus.length / SYNC_BATCH_SIZE);
 
-    if (!variant) {
-      summary.failed.push({
-        productTitle: "(not found)",
-        sku,
-        variantId: "",
-        message: "No variant found with this SKU",
-      });
-      continue;
-    }
+  for (let index = 0; index < skus.length; index += SYNC_BATCH_SIZE) {
+    const batchSkus = skus.slice(index, index + SYNC_BATCH_SIZE);
+    const batchSummary = await syncSkuBatch(admin, batchSkus);
+    mergeSummaries(summary, batchSummary);
+  }
 
-    await syncVariant(admin, variant, summary);
+  if (batchCount > 1) {
+    summary.statusMessage = `Processed ${skus.length} SKUs in ${batchCount} batches of up to ${SYNC_BATCH_SIZE}.`;
   }
 
   return summary;
@@ -420,7 +451,7 @@ export async function syncCylindoVariantImagesBySkus(
 
 export function truncateSyncSummaryForClient(
   summary: SyncSummary,
-  limit = 100,
+  limit = MAX_SKUS_PER_SYNC,
 ): SyncSummary {
   return {
     ...summary,

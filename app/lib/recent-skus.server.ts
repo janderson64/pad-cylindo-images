@@ -6,7 +6,6 @@ export type RecentSku = {
   sku: string;
   productTitle: string;
   createdAt: string;
-  hasImage: boolean;
 };
 
 const RECENT_VARIANTS_BY_ID_QUERY = `#graphql
@@ -139,11 +138,14 @@ async function fetchRecentVariantsByIdScan(
 
       pageHasRecentVariant = true;
 
+      if (node.image?.id) {
+        continue;
+      }
+
       upsertRecentSku(results, {
         sku,
         productTitle: node.product.title,
         createdAt: node.createdAt,
-        hasImage: Boolean(node.image?.id),
       });
 
       if (results.size >= maxResults) {
@@ -220,11 +222,14 @@ async function fetchRecentVariantsFromNewProducts(
           continue;
         }
 
+        if (variant.image?.id) {
+          continue;
+        }
+
         upsertRecentSku(results, {
           sku,
           productTitle: product.title,
           createdAt: variant.createdAt,
-          hasImage: Boolean(variant.image?.id),
         });
 
         if (results.size >= maxResults) {
