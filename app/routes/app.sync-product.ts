@@ -1,4 +1,8 @@
-import type { ActionFunctionArgs, HeadersFunction } from "@remix-run/node";
+import type {
+  ActionFunctionArgs,
+  HeadersFunction,
+  LoaderFunctionArgs,
+} from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useRouteError, type ShouldRevalidateFunctionArgs } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
@@ -10,6 +14,14 @@ import {
   truncateSyncSummaryForClient,
 } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
+
+// Admin UI extensions send an OPTIONS preflight before POST. Remix only
+// invokes loaders for OPTIONS, so authenticate.admin must run here too.
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { cors } = await authenticate.admin(request);
+
+  return cors(json({ error: "Use POST" }, { status: 405 }));
+};
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   let admin;

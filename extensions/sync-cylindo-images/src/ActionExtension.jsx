@@ -2,14 +2,12 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 
-import { APP_URL } from "./config";
-
 export default async () => {
   render(<Extension />, document.body);
 };
 
 function Extension() {
-  const { i18n, close, data, auth } = shopify;
+  const { i18n, close, data } = shopify;
   const productId = data.selected[0]?.id;
 
   const [loadingProduct, setLoadingProduct] = useState(true);
@@ -81,17 +79,10 @@ function Extension() {
     setSyncError("");
 
     try {
-      const token = await auth.idToken();
-
-      if (!token) {
-        throw new Error("Could not authenticate with the app.");
-      }
-
-      const response = await fetch(`${APP_URL}/app/sync-product`, {
+      const response = await fetch("/app/sync-product", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ productId }),
       });
