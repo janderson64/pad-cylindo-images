@@ -14,9 +14,10 @@ import { authenticate } from "../shopify.server";
 export const action = async ({ request }: ActionFunctionArgs) => {
   let admin;
   let session;
+  let cors;
 
   try {
-    ({ admin, session } = await authenticate.admin(request));
+    ({ admin, session, cors } = await authenticate.admin(request));
   } catch (error) {
     console.error("Sync product action authentication failed:", error);
     throw error;
@@ -25,11 +26,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     getCylindoConfig();
   } catch (error) {
-    return json({
-      ok: false as const,
-      error:
-        error instanceof Error ? error.message : "Missing Cylindo configuration",
-    });
+    return cors(
+      json({
+        ok: false as const,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Missing Cylindo configuration",
+      }),
+    );
   }
 
   try {
@@ -37,10 +42,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const productId = String(body.productId ?? "").trim();
 
     if (!productId) {
-      return json({
-        ok: false as const,
-        error: "Missing productId",
-      });
+      return cors(
+        json({
+          ok: false as const,
+          error: "Missing productId",
+        }),
+      );
     }
 
     const summary = truncateSyncSummaryForClient(
@@ -61,29 +68,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       summary.synced.length === 0 &&
       summary.failed.length === 0
     ) {
-      return json({
-        ok: false as const,
-        error: summary.statusMessage,
-        summary,
-      });
+      return cors(
+        json({
+          ok: false as const,
+          error: summary.statusMessage,
+          summary,
+        }),
+      );
     }
 
-    return json({ ok: true as const, summary });
+    return cors(json({ ok: true as const, summary }));
   } catch (error) {
     console.error("Cylindo product sync failed:", error);
 
     if (error instanceof Response) {
       const body = await error.text().catch(() => "");
-      return json({
-        ok: false as const,
-        error: `Shopify API error (${error.status}): ${body || error.statusText}`,
-      });
+      return cors(
+        json({
+          ok: false as const,
+          error: `Shopify API error (${error.status}): ${body || error.statusText}`,
+        }),
+      );
     }
 
-    return json({
-      ok: false as const,
-      error: error instanceof Error ? error.message : "Unexpected sync error",
-    });
+    return cors(
+      json({
+        ok: false as const,
+        error: error instanceof Error ? error.message : "Unexpected sync error",
+      }),
+    );
   }
 };
 

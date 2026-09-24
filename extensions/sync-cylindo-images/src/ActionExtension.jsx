@@ -16,12 +16,13 @@ function Extension() {
   const [syncing, setSyncing] = useState(false);
   const [productTitle, setProductTitle] = useState("");
   const [skuCount, setSkuCount] = useState(0);
-  const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [syncError, setSyncError] = useState("");
   const [result, setResult] = useState(null);
 
   useEffect(() => {
     if (!productId) {
-      setError("No product selected.");
+      setLoadError("No product selected.");
       setLoadingProduct(false);
       return;
     }
@@ -49,7 +50,7 @@ function Extension() {
         const product = json.data?.product;
 
         if (!product) {
-          setError("Product not found.");
+          setLoadError("Product not found.");
           return;
         }
 
@@ -60,7 +61,7 @@ function Extension() {
         setProductTitle(product.title ?? "");
         setSkuCount(new Set(skus.map((sku) => sku.toLowerCase())).size);
       } catch (loadError) {
-        setError(
+        setLoadError(
           loadError instanceof Error
             ? loadError.message
             : "Failed to load product variants.",
@@ -77,7 +78,7 @@ function Extension() {
     }
 
     setSyncing(true);
-    setError("");
+    setSyncError("");
 
     try {
       const token = await auth.idToken();
@@ -86,16 +87,25 @@ function Extension() {
         throw new Error("Could not authenticate with the app.");
       }
 
-      const params = new URLSearchParams({ id_token: token });
-      const response = await fetch(`${APP_URL}/app/sync-product?${params.toString()}`, {
+      const response = await fetch(`${APP_URL}/app/sync-product`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ productId }),
       });
 
-      const json = await response.json();
+      const responseText = await response.text();
+      let json;
+
+      try {
+        json = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        throw new Error(
+          responseText || `Sync request failed (${response.status}).`,
+        );
+      }
 
       if (!response.ok || !json.ok) {
         throw new Error(json.error ?? "Sync failed.");
@@ -103,7 +113,7 @@ function Extension() {
 
       setResult(json.summary);
     } catch (syncError) {
-      setError(
+      setSyncError(
         syncError instanceof Error ? syncError.message : "Sync failed.",
       );
     } finally {
@@ -139,7 +149,9 @@ function Extension() {
                 count: skuCount,
               })}
             </s-text>
-            {error ? <s-text tone="critical">{error}</s-text> : null}
+            {(loadError || syncError) ? (
+              <s-text tone="critical">{loadError || syncError}</s-text>
+            ) : null}
           </>
         )}
       </s-stack>
@@ -152,7 +164,7 @@ function Extension() {
         <>
           <s-button
             slot="primary-action"
-            disabled={loading || skuCount === 0 || Boolean(error)}
+            disabled={loading || skuCount === 0 || Boolean(loadError)}
             onClick={() => void runSync()}
           >
             {i18n.translate("sync")}
