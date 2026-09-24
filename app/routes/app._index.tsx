@@ -3,10 +3,13 @@ import type {
   ActionFunctionArgs,
   HeadersFunction,
   LoaderFunctionArgs,
-  ShouldRevalidateFunctionArgs,
 } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useRouteError } from "@remix-run/react";
+import {
+  useLoaderData,
+  useRouteError,
+  type ShouldRevalidateFunctionArgs,
+} from "@remix-run/react";
 import {
   Page,
   Layout,

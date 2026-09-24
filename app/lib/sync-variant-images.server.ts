@@ -28,7 +28,7 @@ export type SyncSummary = {
 
 const MAX_SYNC_MS = 55_000;
 
-type AdminGraphql = AdminApiContext["admin"]["graphql"];
+type AdminGraphql = AdminApiContext["graphql"];
 
 type ProductNode = {
   id: string;
@@ -274,7 +274,15 @@ async function fetchProductsPage(
   const response = await admin.graphql(PRODUCTS_QUERY, {
     variables: { cursor },
   });
-  const json = await response.json();
+  const json = (await response.json()) as {
+    data?: {
+      products?: {
+        nodes?: ProductNode[];
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+      };
+    };
+    errors?: Array<{ message?: string }>;
+  };
 
   if (Array.isArray(json.errors) && json.errors.length > 0) {
     throw new Error(
