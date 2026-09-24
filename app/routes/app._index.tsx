@@ -10,12 +10,10 @@ import {
 } from "@remix-run/react";
 import {
   Page,
-  Layout,
   Text,
   Card,
   Button,
   BlockStack,
-  Box,
   Banner,
   InlineStack,
   DataTable,
@@ -41,17 +39,10 @@ type RecentSkusData =
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
-  let configSummary: Record<string, string | number> | null = null;
   let configError: string | null = null;
 
   try {
-    const config = getCylindoConfig();
-    configSummary = {
-      accountId: config.accountId,
-      frame: config.frame,
-      size: config.size,
-      version: config.version,
-    };
+    getCylindoConfig();
   } catch (error) {
     configError =
       error instanceof Error ? error.message : "Missing Cylindo configuration";
@@ -65,7 +56,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.error("Failed to load sync history:", error);
   }
 
-  return json({ configSummary, configError, syncHistory });
+  return json({ configError, syncHistory });
 };
 
 export function shouldRevalidate({
@@ -127,7 +118,7 @@ export default function Index() {
   const fetcher = useFetcher<ActionData>();
   const recentSkusFetcher = useFetcher<RecentSkusData>();
   const revalidator = useRevalidator();
-  const { configSummary, configError, syncHistory } = useLoaderData<typeof loader>();
+  const { configError, syncHistory } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
 
@@ -236,70 +227,43 @@ export default function Index() {
         </button>
       </TitleBar>
       <BlockStack gap="500">
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="400">
-                <Text as="h2" variant="headingMd">
-                  Sync frame 30 images from Cylindo
-                </Text>
-                <Text as="p" variant="bodyMd">
-                  Enter variant SKUs to sync. The app looks up each SKU, builds
-                  a Cylindo frame URL from product and variant metafields, and
-                  uploads the image only when the variant does not already have
-                  one.
-                </Text>
-                <TextField
-                  label="Variant SKUs"
-                  value={skuInput}
-                  onChange={setSkuInput}
-                  multiline={4}
-                  autoComplete="off"
-                  helpText="One SKU per line, or comma-separated. Up to 50 SKUs per sync."
-                  placeholder={"FRMDSEC_3-BLISS\nFRMDSEC_3-WALNUT"}
-                />
-                {configError && (
-                  <Banner tone="warning" title="Configuration required">
-                    <p>{configError}</p>
-                  </Banner>
-                )}
-                <InlineStack gap="300">
-                  <Button
-                    variant="primary"
-                    loading={isLoading}
-                    onClick={() => void runSync()}
-                    disabled={syncDisabled}
-                  >
-                    Sync Cylindo variant images
-                  </Button>
-                </InlineStack>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-          <Layout.Section variant="oneThird">
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Cylindo settings
-                </Text>
-                <Text as="p" variant="bodyMd">
-                  Configure via environment variables on the app host.
-                </Text>
-                {configSummary && (
-                  <Box
-                    padding="300"
-                    background="bg-surface-active"
-                    borderRadius="200"
-                  >
-                    <pre style={{ margin: 0, fontSize: "12px" }}>
-                      {JSON.stringify(configSummary, null, 2)}
-                    </pre>
-                  </Box>
-                )}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
+        <Card>
+          <BlockStack gap="400">
+            <Text as="h2" variant="headingMd">
+              Sync Cylindo Images
+            </Text>
+            <Text as="p" variant="bodyMd">
+              Enter variant SKUs to sync. The app looks up each SKU, builds
+              a Cylindo frame URL from product and variant metafields, and
+              uploads the image only when the variant does not already have
+              one.
+            </Text>
+            <TextField
+              label="Variant SKUs"
+              value={skuInput}
+              onChange={setSkuInput}
+              multiline={4}
+              autoComplete="off"
+              helpText="One SKU per line, or comma-separated. Up to 50 SKUs per sync."
+              placeholder={"FRMDSEC_3-BLISS\nFRMDSEC_3-WALNUT"}
+            />
+            {configError && (
+              <Banner tone="warning" title="Configuration required">
+                <p>{configError}</p>
+              </Banner>
+            )}
+            <InlineStack gap="300">
+              <Button
+                variant="primary"
+                loading={isLoading}
+                onClick={() => void runSync()}
+                disabled={syncDisabled}
+              >
+                Sync Cylindo variant images
+              </Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
 
         {fetcher.data && !fetcher.data.ok && (
           <Banner tone="critical" title="Sync failed">
@@ -416,14 +380,35 @@ export default function Index() {
               </Text>
             ) : recentSkus.length > 0 ? (
               <>
-                <TextField
-                  label="SKU list"
-                  value={recentSkuList}
-                  multiline={6}
-                  autoComplete="off"
-                  readOnly
-                  helpText="One SKU per line, ready to copy into another tool or the sync field."
-                />
+                <BlockStack gap="200">
+                  <Text as="p" variant="bodyMd" fontWeight="medium">
+                    SKU list
+                  </Text>
+                  <textarea
+                    readOnly
+                    value={recentSkuList}
+                    aria-label="SKU list"
+                    style={{
+                      width: "100%",
+                      height: "160px",
+                      overflowY: "auto",
+                      padding: "8px 12px",
+                      border: "1px solid var(--p-color-border-secondary)",
+                      borderRadius: "8px",
+                      fontFamily: "inherit",
+                      fontSize: "13px",
+                      lineHeight: "20px",
+                      resize: "none",
+                      boxSizing: "border-box",
+                      background: "var(--p-color-bg-surface)",
+                      color: "var(--p-color-text)",
+                    }}
+                  />
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    One SKU per line, ready to copy into another tool or the sync
+                    field. Scroll to view the full list.
+                  </Text>
+                </BlockStack>
                 <InlineStack gap="300">
                   <Button onClick={() => void copyRecentSkus()}>
                     Copy SKUs
