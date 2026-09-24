@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -6,6 +6,7 @@ import type {
 } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import {
+  useFetcher,
   useLoaderData,
   useRouteError,
   type ShouldRevalidateFunctionArgs,
@@ -67,13 +68,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   } catch (error) {
     console.error("Sync action authentication failed:", error);
     throw error;
-  }
-
-  const formData = await request.formData();
-  const intent = formData.get("intent");
-
-  if (intent === "ping") {
-    return json({ ok: true as const, summary: emptySummary("App connection OK") });
   }
 
   try {
@@ -139,17 +133,6 @@ export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
 
-function emptySummary(statusMessage: string): SyncSummary {
-  return {
-    synced: [],
-    skippedHasImage: [],
-    skippedMissingMetafields: [],
-    failed: [],
-    productsScanned: 0,
-    statusMessage,
-  };
-}
-
 function buildLogRows(summary: SyncSummary) {
   const rows: Array<[string, string, string, string]> = [];
 
@@ -172,99 +155,43 @@ function buildLogRows(summary: SyncSummary) {
   return rows;
 }
 
-async function postAppAction(
-  getIdToken: () => Promise<string>,
-  body: URLSearchParams,
-): Promise<{ response: Response; data: ActionData | null }> {
-  const params = new URLSearchParams(window.location.search);
-  const token = await getIdToken();
-
-  params.set("id_token", token);
-
-  const response = await fetch(`${window.location.pathname}?${params.toString()}`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-    },
-    body: body.toString(),
-  });
-
-  const contentType = response.headers.get("content-type") ?? "";
-
-  if (!contentType.includes("application/json")) {
-    const text = await response.text();
-    throw new Error(
-      `Unexpected response (${response.status}). ${text.slice(0, 200)}`,
-    );
-  }
-
-  return {
-    response,
-    data: (await response.json()) as ActionData,
-  };
-}
-
 export default function Index() {
+  const fetcher = useFetcher<ActionData>();
   const { configSummary, configError } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
-  const [actionData, setActionData] = useState<ActionData | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [requestError, setRequestError] = useState<string | null>(null);
 
-  const runAction = useCallback(
-    async (intent: "sync" | "ping") => {
-      setIsLoading(true);
-      setRequestError(null);
+  const isLoading =
+    ["loading", "submitting"].includes(fetcher.state) &&
+    fetcher.formMethod === "POST";
 
-      try {
-        const body = new URLSearchParams();
-        body.set("intent", intent);
+  const runSync = useCallback(async () => {
+    const params = new URLSearchParams(window.location.search);
 
-        const { response, data } = await postAppAction(() => shopify.idToken(), body);
+    try {
+      const token = await shopify.idToken();
+      params.set("id_token", token);
+    } catch (error) {
+      shopify.toast.show(
+        error instanceof Error ? error.message : "Could not get session token",
+        { isError: true },
+      );
+      return;
+    }
 
-        if (!response.ok) {
-          throw new Error(
-            data?.ok === false
-              ? data.error
-              : `Request failed with status ${response.status}`,
-          );
-        }
-
-        if (!data) {
-          throw new Error("Sync returned an empty response.");
-        }
-
-        setActionData(data);
-
-        if (data.ok) {
-          shopify.toast.show(
-            intent === "ping"
-              ? "Connection OK"
-              : `Sync complete: ${data.summary.synced.length} synced`,
-          );
-        } else {
-          shopify.toast.show(data.error, { isError: true });
-        }
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Sync request failed";
-        setRequestError(message);
-        shopify.toast.show(message, { isError: true });
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [shopify],
-  );
+    fetcher.submit({}, { method: "POST", action: `/app?${params.toString()}` });
+  }, [fetcher, shopify]);
 
   useEffect(() => {
-    void runAction("ping");
-  }, [runAction]);
+    if (fetcher.data?.ok) {
+      shopify.toast.show(
+        `Sync complete: ${fetcher.data.summary.synced.length} synced`,
+      );
+    } else if (fetcher.data && !fetcher.data.ok) {
+      shopify.toast.show(fetcher.data.error, { isError: true });
+    }
+  }, [fetcher.data, shopify]);
 
-  const summary =
-    actionData && (actionData.ok || actionData.summary) ? actionData.summary : null;
+  const summary = fetcher.data?.ok ? fetcher.data.summary : null;
   const syncDisabled = Boolean(configError) || isLoading;
 
   return (
@@ -272,7 +199,7 @@ export default function Index() {
       <TitleBar title="Cylindo Variant Images">
         <button
           variant="primary"
-          onClick={() => void runAction("sync")}
+          onClick={() => void runSync()}
           disabled={syncDisabled}
         >
           Sync Cylindo variant images
@@ -297,16 +224,11 @@ export default function Index() {
                     <p>{configError}</p>
                   </Banner>
                 )}
-                {requestError && (
-                  <Banner tone="critical" title="Request failed">
-                    <p>{requestError}</p>
-                  </Banner>
-                )}
                 <InlineStack gap="300">
                   <Button
                     variant="primary"
                     loading={isLoading}
-                    onClick={() => void runAction("sync")}
+                    onClick={() => void runSync()}
                     disabled={syncDisabled}
                   >
                     Sync Cylindo variant images
@@ -340,9 +262,9 @@ export default function Index() {
           </Layout.Section>
         </Layout>
 
-        {actionData && !actionData.ok && (
+        {fetcher.data && !fetcher.data.ok && (
           <Banner tone="critical" title="Sync failed">
-            <p>{actionData.error}</p>
+            <p>{fetcher.data.error}</p>
           </Banner>
         )}
 
