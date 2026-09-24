@@ -33,7 +33,9 @@ type AdminGraphql = AdminApiContext["graphql"];
 type ProductNode = {
   id: string;
   title: string;
-  metafields: Array<{ key: string; value: string | null }>;
+  metafields: {
+    nodes: Array<{ key: string; value: string | null }>;
+  };
   variants: {
     nodes: Array<{
       id: string;
@@ -55,17 +57,11 @@ const PRODUCTS_QUERY = `#graphql
       nodes {
         id
         title
-        metafields(
-          identifiers: [
-            { namespace: "cylindo", key: "enabled" },
-            { namespace: "cylindo", key: "product_code" },
-            { namespace: "cylindo", key: "variant_option1_name" },
-            { namespace: "cylindo", key: "variant_option2_name" },
-            { namespace: "cylindo", key: "variant_option3_name" }
-          ]
-        ) {
-          key
-          value
+        metafields(first: 20, namespace: "cylindo") {
+          nodes {
+            key
+            value
+          }
         }
         variants(first: 100) {
           pageInfo {
@@ -195,7 +191,7 @@ async function syncProductVariants(
   summary: SyncSummary,
 ): Promise<void> {
   const config = getCylindoConfig();
-  const productMetafields = parseProductMetafields(product.metafields);
+  const productMetafields = parseProductMetafields(product.metafields.nodes);
 
   for (const variant of product.variants.nodes) {
     if (variant.image?.id) {
