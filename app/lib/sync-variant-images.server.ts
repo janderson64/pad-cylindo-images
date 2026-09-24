@@ -456,7 +456,7 @@ async function syncVariant(
     return;
   }
 
-  const alt = `Cylindo frame ${config.frame} — ${variant.sku ?? variant.id}`;
+  const alt = variant.sku ?? variant.id;
   const shopifyError = await attachImageToVariant(
     admin,
     variant.product.id,
