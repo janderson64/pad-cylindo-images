@@ -1,0 +1,74 @@
+# DigitalOcean App Platform spec for cylindo-image-update
+# Docs: https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+#
+# Before deploying:
+# 1. Push this repo to GitHub and set `github.repo` below
+# 2. Add SHOPIFY_API_SECRET as a secret in the DO dashboard (Encrypt)
+# 3. After first deploy, set SHOPIFY_APP_URL to your *.ondigitalocean.app URL
+# 4. Update shopify.app.production.toml and run: shopify app deploy --config production
+
+name: cylindo-image-update
+region: sfo
+
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+
+databases:
+  - name: session-db
+    engine: PG
+    version: "16"
+    production: true
+
+services:
+  - name: web
+    dockerfile_path: Dockerfile
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    github:
+      repo: janderson64/pad-cylindo-images
+      branch: main
+      deploy_on_push: true
+    health_check:
+      http_path: /
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${session-db.DATABASE_URL}
+      - key: SHOPIFY_API_KEY
+        scope: RUN_TIME
+        value: "21128d690914e4ca94bb1ded5b4442fa"
+      - key: SHOPIFY_API_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: SCOPES
+        scope: RUN_TIME
+        value: read_products,write_products
+      - key: SHOPIFY_APP_URL
+        scope: RUN_TIME
+        value: https://REPLACE-WITH-YOUR-APP.ondigitalocean.app
+      - key: SHOP_CUSTOM_DOMAIN
+        scope: RUN_TIME
+        value: paddyo.com
+      - key: CYLINDO_ACCOUNT_ID
+        scope: RUN_TIME
+        value: "4932"
+      - key: CYLINDO_FRAME
+        scope: RUN_TIME
+        value: "30"
+      - key: CYLINDO_SIZE
+        scope: RUN_TIME
+        value: "1024"
+      - key: CYLINDO_VERSION
+        scope: RUN_TIME
+        value: "5"

@@ -1,0 +1,32 @@
+# Production Shopify app config — used after DigitalOcean deploy.
+# Replace APP_URL with your App Platform URL, then:
+#   shopify app deploy --config production
+
+client_id = "21128d690914e4ca94bb1ded5b4442fa"
+name = "cylindo-image-update"
+application_url = "https://REPLACE-WITH-YOUR-APP.ondigitalocean.app"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = false
+
+[webhooks]
+api_version = "2026-01"
+
+  [[webhooks.subscriptions]]
+  topics = ["app/uninstalled"]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = ["app/scopes_update"]
+  uri = "/webhooks/app/scopes_update"
+
+[access_scopes]
+scopes = "read_products,write_products"
+
+[auth]
+redirect_urls = [
+  "https://REPLACE-WITH-YOUR-APP.ondigitalocean.app/auth/callback",
+  "https://REPLACE-WITH-YOUR-APP.ondigitalocean.app/auth/shopify/callback",
+  "https://REPLACE-WITH-YOUR-APP.ondigitalocean.app/api/auth/callback",
+]
