@@ -1,8 +1,12 @@
 {
   "name": "Synchroniser les images Cylindo",
   "title": "Synchroniser les images Cylindo",
-  "description": "Synchronisez les images Cylindo frame {{frame}} pour {{count}} SKU de variantes sur ce produit. Les variantes qui ont déjà une image sont ignorées.",
+  "description": "Synchronisez les images Cylindo frame {{frame}} pour {{count}} SKU de variantes sur ce produit. Une confirmation sera demandée avant de remplacer des images existantes.",
   "sync": "Synchroniser les images",
   "cancel": "Annuler",
-  "close": "Fermer"
+  "close": "Fermer",
+  "overwriteTitle": "Remplacer les images de variantes existantes ?",
+  "overwriteMessage": "{{count}} variantes de ce produit ont déjà une image. Continuer remplacera ces images par de nouvelles images Cylindo frame. Cette action ne peut pas être annulée depuis cette application.",
+  "overwriteProceed": "Continuer et remplacer",
+  "overwriteSkus": "SKU concernés : {{skus}}"
 }

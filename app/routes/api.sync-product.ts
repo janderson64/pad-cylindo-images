@@ -3,7 +3,7 @@ import { json } from "@remix-run/node";
 import { useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
-import { getCylindoConfig, parseCylindoFrame } from "../lib/cylindo-config.server";
+import { getCylindoConfig, parseCylindoFrame, parseOverwriteExisting } from "../lib/cylindo-config.server";
 import {
   createSyncJob,
   createSyncJobFromCounts,
@@ -11,6 +11,8 @@ import {
 import {
   buildBatchProgressLogs,
   parseSkuList,
+  previewCylindoSync,
+  previewCylindoSyncByProductId,
   syncCylindoVariantImagesByProductId,
   syncCylindoVariantImagesByProductIdBatch,
   syncCylindoVariantImagesBySkuList,
@@ -81,7 +83,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const batchParam = url.searchParams.get("batch");
     const skuInput = `product:${productId}`;
     const frame = parseCylindoFrame(url.searchParams.get("frame"));
-    const syncOptions = frame !== undefined ? { frame } : undefined;
+    const overwriteExisting = parseOverwriteExisting(
+      url.searchParams.get("overwriteExisting"),
+    );
+    const syncOptions =
+      frame !== undefined || overwriteExisting
+        ? { frame, overwriteExisting }
+        : undefined;
 
     if (url.searchParams.has("frame") && frame === undefined) {
       return cors(
@@ -90,6 +98,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           error: "Enter a valid Cylindo frame number (0 or greater).",
         }),
       );
+    }
+
+    if (url.searchParams.get("preview") === "1") {
+      const preview = await previewCylindoSyncByProductId(admin, productId);
+
+      return cors(json({ ok: true as const, ...preview }));
     }
 
     if (url.searchParams.get("historyOnly") === "1") {

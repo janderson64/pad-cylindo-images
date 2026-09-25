@@ -85,14 +85,17 @@ function Extension() {
   const [syncing, setSyncing] = useState(false);
   const [productTitle, setProductTitle] = useState("");
   const [skuList, setSkuList] = useState([]);
+  const [skusWithImages, setSkusWithImages] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [syncError, setSyncError] = useState("");
   const [frame, setFrame] = useState(30);
+  const [showOverwriteWarning, setShowOverwriteWarning] = useState(false);
   const [progressMessage, setProgressMessage] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
   const [result, setResult] = useState(null);
 
   const skuCount = skuList.length;
+  const overwriteCount = skusWithImages.length;
 
   function appendLogs(messages) {
     if (!messages.length) {
@@ -120,6 +123,9 @@ function Extension() {
                 variants(first: 250) {
                   nodes {
                     sku
+                    image {
+                      id
+                    }
                   }
                 }
               }
@@ -138,6 +144,7 @@ function Extension() {
 
         const seen = new Set();
         const skus = [];
+        const withImages = [];
 
         for (const variant of product.variants?.nodes ?? []) {
           const sku = variant.sku?.trim();
@@ -154,10 +161,15 @@ function Extension() {
 
           seen.add(key);
           skus.push(sku);
+
+          if (variant.image?.id) {
+            withImages.push(sku);
+          }
         }
 
         setProductTitle(product.title ?? "");
         setSkuList(skus);
+        setSkusWithImages(withImages);
       } catch (loadError) {
         setLoadError(
           loadError instanceof Error
@@ -170,7 +182,7 @@ function Extension() {
     })();
   }, [productId]);
 
-  async function runSync() {
+  async function runSync(overwriteExisting) {
     if (!productId || syncing || skuList.length === 0) {
       return;
     }
@@ -185,6 +197,7 @@ function Extension() {
 
     setSyncing(true);
     setSyncError("");
+    setShowOverwriteWarning(false);
     setProgressMessage("Starting sync...");
     setSyncLogs([]);
     appendLogs([`Starting sync for ${skuList.length} variant SKUs.`]);
@@ -204,6 +217,10 @@ function Extension() {
           skus: sku,
           frame: String(frame),
         });
+
+        if (overwriteExisting) {
+          params.set("overwriteExisting", "1");
+        }
 
         const json = await fetchSyncJson(
           `/api/sync-product?${params.toString()}`,
@@ -254,6 +271,16 @@ function Extension() {
     }
   }
 
+  function handleSyncClick() {
+    if (overwriteCount > 0 && !showOverwriteWarning) {
+      setShowOverwriteWarning(true);
+      setSyncError("");
+      return;
+    }
+
+    void runSync(showOverwriteWarning);
+  }
+
   return (
     <s-admin-action heading={i18n.translate("title")} loading={loadingProduct}>
       <s-stack direction="block" gap="base">
@@ -271,6 +298,25 @@ function Extension() {
             {result.statusMessage ? (
               <s-text tone="neutral">{result.statusMessage}</s-text>
             ) : null}
+          </>
+        ) : showOverwriteWarning ? (
+          <>
+            <s-text type="strong">{productTitle}</s-text>
+            <s-banner tone="warning" heading={i18n.translate("overwriteTitle")}>
+              <s-text>
+                {i18n.translate("overwriteMessage", {
+                  count: overwriteCount,
+                })}
+              </s-text>
+            </s-banner>
+            {skusWithImages.length > 0 ? (
+              <s-text tone="neutral">
+                {i18n.translate("overwriteSkus", {
+                  skus: skusWithImages.join(", "),
+                })}
+              </s-text>
+            ) : null}
+            {syncError ? <s-text tone="critical">{syncError}</s-text> : null}
           </>
         ) : (
           <>
@@ -318,12 +364,29 @@ function Extension() {
         <s-button slot="primary-action" onClick={() => close()}>
           {i18n.translate("close")}
         </s-button>
+      ) : showOverwriteWarning ? (
+        <>
+          <s-button
+            slot="primary-action"
+            disabled={syncing}
+            onClick={() => void runSync(true)}
+          >
+            {i18n.translate("overwriteProceed")}
+          </s-button>
+          <s-button
+            slot="secondary-actions"
+            disabled={syncing}
+            onClick={() => setShowOverwriteWarning(false)}
+          >
+            {i18n.translate("cancel")}
+          </s-button>
+        </>
       ) : (
         <>
           <s-button
             slot="primary-action"
             disabled={loadingProduct || syncing || skuCount === 0 || Boolean(loadError)}
-            onClick={() => void runSync()}
+            onClick={() => handleSyncClick()}
           >
             {syncing ? "Syncing..." : i18n.translate("sync")}
           </s-button>

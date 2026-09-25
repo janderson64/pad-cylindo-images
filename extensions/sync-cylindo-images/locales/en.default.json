@@ -1,8 +1,12 @@
 {
   "name": "Sync Cylindo images",
   "title": "Sync Cylindo images",
-  "description": "Sync Cylindo frame {{frame}} images for {{count}} variant SKUs on this product. Variants that already have images are skipped.",
+  "description": "Sync Cylindo frame {{frame}} images for {{count}} variant SKUs on this product. You will be asked to confirm before replacing any existing variant images.",
   "sync": "Sync images",
   "cancel": "Cancel",
-  "close": "Close"
+  "close": "Close",
+  "overwriteTitle": "Replace existing variant images?",
+  "overwriteMessage": "{{count}} variants on this product already have images. Continuing will replace those images with new Cylindo frame images. This cannot be undone from this app.",
+  "overwriteProceed": "Proceed and overwrite",
+  "overwriteSkus": "Affected SKUs: {{skus}}"
 }

@@ -18,6 +18,7 @@ import {
   InlineStack,
   DataTable,
   TextField,
+  Modal,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-remix/server";
@@ -35,6 +36,10 @@ type ActionData =
 
 type RecentSkusData =
   | { ok: true; recentSkus: RecentSku[] }
+  | { ok: false; error: string };
+
+type SyncPreviewData =
+  | { ok: true; variantsWithImages: number; skusWithImages: string[] }
   | { ok: false; error: string };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -119,6 +124,12 @@ export default function Index() {
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
   const [frameInput, setFrameInput] = useState(String(defaultFrame));
+  const [overwriteModalOpen, setOverwriteModalOpen] = useState(false);
+  const [overwritePreview, setOverwritePreview] = useState<{
+    count: number;
+    skus: string[];
+  } | null>(null);
+  const [checkingOverwrite, setCheckingOverwrite] = useState(false);
 
   const recentSkus =
     recentSkusFetcher.data?.ok === true ? recentSkusFetcher.data.recentSkus : [];
@@ -143,6 +154,35 @@ export default function Index() {
   const isLoading =
     ["loading", "submitting"].includes(fetcher.state) &&
     fetcher.formMethod === "POST";
+
+  const submitSync = useCallback(
+    async (overwriteExisting: boolean) => {
+      const skus = skuInput.trim();
+      const frame = Number(frameInput);
+      const params = new URLSearchParams(window.location.search);
+
+      try {
+        const token = await shopify.idToken();
+        params.set("id_token", token);
+      } catch (error) {
+        shopify.toast.show(
+          error instanceof Error ? error.message : "Could not get session token",
+          { isError: true },
+        );
+        return;
+      }
+
+      fetcher.submit(
+        {
+          skus,
+          frame: String(frame),
+          overwriteExisting: overwriteExisting ? "1" : "0",
+        },
+        { method: "POST", action: `/app/sync?${params.toString()}` },
+      );
+    },
+    [fetcher, frameInput, shopify, skuInput],
+  );
 
   const runSync = useCallback(async () => {
     const skus = skuInput.trim();
@@ -174,11 +214,37 @@ export default function Index() {
       return;
     }
 
-    fetcher.submit(
-      { skus, frame: String(frame) },
-      { method: "POST", action: `/app/sync?${params.toString()}` },
-    );
-  }, [fetcher, frameInput, shopify, skuInput]);
+    params.set("skus", skus);
+    setCheckingOverwrite(true);
+
+    try {
+      const previewResponse = await fetch(`/app/sync-preview?${params.toString()}`);
+      const preview = (await previewResponse.json()) as SyncPreviewData;
+
+      if (!preview.ok) {
+        shopify.toast.show(preview.error, { isError: true });
+        return;
+      }
+
+      if (preview.variantsWithImages > 0) {
+        setOverwritePreview({
+          count: preview.variantsWithImages,
+          skus: preview.skusWithImages,
+        });
+        setOverwriteModalOpen(true);
+        return;
+      }
+
+      await submitSync(false);
+    } catch (error) {
+      shopify.toast.show(
+        error instanceof Error ? error.message : "Could not check existing images",
+        { isError: true },
+      );
+    } finally {
+      setCheckingOverwrite(false);
+    }
+  }, [frameInput, shopify, skuInput, submitSync]);
 
   useEffect(() => {
     if (fetcher.data?.ok) {
@@ -221,7 +287,11 @@ export default function Index() {
       ? fetcher.data.summary
       : null;
   const syncDisabled =
-    Boolean(configError) || isLoading || !skuInput.trim() || !frameInput.trim();
+    Boolean(configError) ||
+    isLoading ||
+    checkingOverwrite ||
+    !skuInput.trim() ||
+    !frameInput.trim();
 
   return (
     <Page>
@@ -243,8 +313,9 @@ export default function Index() {
             <Text as="p" variant="bodyMd">
               Enter variant SKUs to sync. The app looks up each SKU, builds
               a Cylindo frame URL from product and variant metafields, and
-              uploads the image only when the variant does not already have
-              one.
+              uploads the image when the variant has no image. If a variant
+              already has an image, you will be asked to confirm before it
+              is replaced.
             </Text>
             <TextField
               label="Cylindo frame"
@@ -280,6 +351,48 @@ export default function Index() {
             </InlineStack>
           </BlockStack>
         </Card>
+
+        <Modal
+          open={overwriteModalOpen}
+          onClose={() => {
+            setOverwriteModalOpen(false);
+            setOverwritePreview(null);
+          }}
+          title="Replace existing variant images?"
+          primaryAction={{
+            content: "Proceed and overwrite",
+            destructive: true,
+            onAction: () => {
+              setOverwriteModalOpen(false);
+              setOverwritePreview(null);
+              void submitSync(true);
+            },
+          }}
+          secondaryActions={[
+            {
+              content: "Cancel",
+              onAction: () => {
+                setOverwriteModalOpen(false);
+                setOverwritePreview(null);
+              },
+            },
+          ]}
+        >
+          <Modal.Section>
+            <BlockStack gap="300">
+              <Text as="p" variant="bodyMd">
+                {overwritePreview?.count ?? 0} of the requested variants already
+                have images. Continuing will replace those images with new
+                Cylindo frame images. This cannot be undone from this app.
+              </Text>
+              {overwritePreview && overwritePreview.skus.length > 0 ? (
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Affected SKUs: {overwritePreview.skus.join(", ")}
+                </Text>
+              ) : null}
+            </BlockStack>
+          </Modal.Section>
+        </Modal>
 
         {fetcher.data && !fetcher.data.ok && (
           <Banner tone="critical" title="Sync failed">

@@ -3,7 +3,7 @@ import { json } from "@remix-run/node";
 import { useRouteError, type ShouldRevalidateFunctionArgs } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
-import { getCylindoConfig, parseCylindoFrame } from "../lib/cylindo-config.server";
+import { getCylindoConfig, parseCylindoFrame, parseOverwriteExisting } from "../lib/cylindo-config.server";
 import { createSyncJob } from "../lib/sync-history.server";
 import {
   syncCylindoVariantImages,
@@ -36,6 +36,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const formData = await request.formData();
     const skus = String(formData.get("skus") ?? "");
     const frame = parseCylindoFrame(formData.get("frame"));
+    const overwriteExisting = parseOverwriteExisting(
+      formData.get("overwriteExisting"),
+    );
 
     if (formData.get("frame") && frame === undefined) {
       return json({
@@ -45,7 +48,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const summary = truncateSyncSummaryForClient(
-      await syncCylindoVariantImages(admin, skus, { frame }),
+      await syncCylindoVariantImages(admin, skus, { frame, overwriteExisting }),
     );
 
     try {

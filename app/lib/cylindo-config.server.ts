@@ -23,6 +23,18 @@ export function parseCylindoFrame(
   return parsed;
 }
 
+export function parseOverwriteExisting(
+  value: FormDataEntryValue | string | null | undefined,
+): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  const raw = String(value).trim().toLowerCase();
+
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 export function getCylindoConfig(overrides?: { frame?: number }): CylindoConfig {
   const accountId = process.env.CYLINDO_ACCOUNT_ID?.trim();
 

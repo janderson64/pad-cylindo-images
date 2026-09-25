@@ -27,6 +27,12 @@ export type SyncSummary = {
 
 export type SyncOptions = {
   frame?: number;
+  overwriteExisting?: boolean;
+};
+
+export type SyncPreview = {
+  variantsWithImages: number;
+  skusWithImages: string[];
 };
 
 const MAX_SKUS_PER_SYNC = 150;
@@ -137,6 +143,23 @@ const APPEND_MEDIA_MUTATION = `#graphql
   }
 `;
 
+const DETACH_MEDIA_MUTATION = `#graphql
+  mutation CylindoProductVariantDetachMedia(
+    $productId: ID!
+    $variantMedia: [ProductVariantDetachMediaInput!]!
+  ) {
+    productVariantDetachMedia(productId: $productId, variantMedia: $variantMedia) {
+      productVariants {
+        id
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 function entry(
   productTitle: string,
   variant: { id: string; sku: string | null },
@@ -226,13 +249,54 @@ async function waitForMediaReady(
   return "Timed out waiting for Shopify to process the image";
 }
 
+async function detachVariantImage(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+  variantId: string,
+  mediaId: string,
+): Promise<string | null> {
+  const response = await admin.graphql(DETACH_MEDIA_MUTATION, {
+    variables: {
+      productId,
+      variantMedia: [
+        {
+          variantId,
+          mediaIds: [mediaId],
+        },
+      ],
+    },
+  });
+
+  const json = await response.json();
+  const errors = json.data?.productVariantDetachMedia?.userErrors ?? [];
+
+  if (errors.length > 0) {
+    return errors.map((error: { message: string }) => error.message).join("; ");
+  }
+
+  return null;
+}
+
 async function attachImageToVariant(
   admin: { graphql: AdminGraphql },
   productId: string,
   variantId: string,
   imageUrl: string,
   alt: string,
+  existingImageId?: string | null,
 ): Promise<string | null> {
+  if (existingImageId) {
+    const detachError = await detachVariantImage(
+      admin,
+      productId,
+      variantId,
+      existingImageId,
+    );
+
+    if (detachError) {
+      return detachError;
+    }
+  }
   const createResponse = await admin.graphql(CREATE_MEDIA_MUTATION, {
     variables: {
       productId,
@@ -416,7 +480,9 @@ async function syncVariant(
     return;
   }
 
-  if (variant.image?.id) {
+  const hadExistingImage = Boolean(variant.image?.id);
+
+  if (hadExistingImage && !options?.overwriteExisting) {
     summary.skippedHasImage.push(
       entry(variant.product.title, variant, "Variant already has an image"),
     );
@@ -470,6 +536,7 @@ async function syncVariant(
     variant.id,
     urlResult.url,
     alt,
+    options?.overwriteExisting ? variant.image?.id : null,
   );
 
   if (shopifyError) {
@@ -480,8 +547,44 @@ async function syncVariant(
   }
 
   summary.synced.push(
-    entry(variant.product.title, variant, "Synced Cylindo frame image", urlResult.url),
+    entry(
+      variant.product.title,
+      variant,
+      hadExistingImage
+        ? "Replaced existing variant image with Cylindo frame image"
+        : "Synced Cylindo frame image",
+      urlResult.url,
+    ),
   );
+}
+
+export async function previewCylindoSync(
+  admin: { graphql: AdminGraphql },
+  skusInput: string,
+): Promise<SyncPreview> {
+  const skus = parseSkuList(skusInput);
+  const skusWithImages: string[] = [];
+
+  for (const sku of skus) {
+    const variant = await fetchVariantBySku(admin, sku);
+
+    if (variant?.image?.id) {
+      skusWithImages.push(variant.sku ?? sku);
+    }
+  }
+
+  return {
+    variantsWithImages: skusWithImages.length,
+    skusWithImages,
+  };
+}
+
+export async function previewCylindoSyncByProductId(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+): Promise<SyncPreview> {
+  const { skus } = await fetchProductVariantSkus(admin, productId);
+  return previewCylindoSync(admin, skus.join("\n"));
 }
 
 function mergeSummaries(target: SyncSummary, batch: SyncSummary): void {
