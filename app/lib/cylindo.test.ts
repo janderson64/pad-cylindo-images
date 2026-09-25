@@ -13,7 +13,6 @@ const config = {
   accountId: "4932",
   frame: 30,
   size: 1024,
-  version: 5,
 };
 
 const productMetafields = {
@@ -39,7 +38,7 @@ assert.deepEqual(pairs, [
 const url = buildCylindoFrameUrl(config, "FRMDSEC_3", pairs!);
 assert.equal(
   url,
-  "https://content-v2.cylindo.com/api/v2/4932/products/FRMDSEC_3/frames/30/FRMDSEC_3.png?size=1024&version=5&feature=BACK%3ABLISS_OATMEAL&feature=FINISH%3AWOOD_CGRA",
+  "https://content-v2.cylindo.com/api/v2/4932/products/FRMDSEC_3/frames/30/FRMDSEC_3.png?size=1024&feature=BACK%3ABLISS_OATMEAL&feature=FINISH%3AWOOD_CGRA",
 );
 
 const built = buildCylindoFrameUrlForVariant(

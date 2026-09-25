@@ -143,7 +143,6 @@ export function buildCylindoFrameUrl(
 ): string {
   const params = new URLSearchParams();
   params.set("size", String(config.size));
-  params.set("version", String(config.version));
 
   for (const pair of pairs) {
     params.append("feature", `${pair.name}:${pair.code}`);

@@ -1,7 +1,7 @@
 {
   "name": "Synchroniser les images Cylindo",
   "title": "Synchroniser les images Cylindo",
-  "description": "Synchronisez les images Cylindo frame 30 pour {{count}} SKU de variantes sur ce produit. Les variantes qui ont déjà une image sont ignorées.",
+  "description": "Synchronisez les images Cylindo frame {{frame}} pour {{count}} SKU de variantes sur ce produit. Les variantes qui ont déjà une image sont ignorées.",
   "sync": "Synchroniser les images",
   "cancel": "Annuler",
   "close": "Fermer"

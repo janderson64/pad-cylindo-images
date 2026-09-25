@@ -87,6 +87,7 @@ function Extension() {
   const [skuList, setSkuList] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [syncError, setSyncError] = useState("");
+  const [frame, setFrame] = useState(30);
   const [progressMessage, setProgressMessage] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
   const [result, setResult] = useState(null);
@@ -174,6 +175,11 @@ function Extension() {
       return;
     }
 
+    if (!Number.isInteger(frame) || frame < 0) {
+      setSyncError("Enter a valid Cylindo frame number (0 or greater).");
+      return;
+    }
+
     const merged = emptySummary();
     merged.variantsRequested = skuList.length;
 
@@ -196,6 +202,7 @@ function Extension() {
         const params = new URLSearchParams({
           productId,
           skus: sku,
+          frame: String(frame),
         });
 
         const json = await fetchSyncJson(
@@ -268,9 +275,24 @@ function Extension() {
         ) : (
           <>
             <s-text type="strong">{productTitle}</s-text>
+            <s-number-field
+              label="Cylindo frame"
+              value={String(frame)}
+              min={0}
+              step={1}
+              inputMode="numeric"
+              onChange={(event) => {
+                const next = Number(event.currentTarget.value);
+
+                if (Number.isInteger(next) && next >= 0) {
+                  setFrame(next);
+                }
+              }}
+            />
             <s-text>
               {i18n.translate("description", {
                 count: skuCount,
+                frame,
               })}
             </s-text>
             {syncing && progressMessage ? (

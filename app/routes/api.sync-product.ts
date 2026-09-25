@@ -3,7 +3,7 @@ import { json } from "@remix-run/node";
 import { useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
-import { getCylindoConfig } from "../lib/cylindo-config.server";
+import { getCylindoConfig, parseCylindoFrame } from "../lib/cylindo-config.server";
 import {
   createSyncJob,
   createSyncJobFromCounts,
@@ -80,6 +80,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const batchParam = url.searchParams.get("batch");
     const skuInput = `product:${productId}`;
+    const frame = parseCylindoFrame(url.searchParams.get("frame"));
+    const syncOptions = frame !== undefined ? { frame } : undefined;
+
+    if (url.searchParams.has("frame") && frame === undefined) {
+      return cors(
+        json({
+          ok: false as const,
+          error: "Enter a valid Cylindo frame number (0 or greater).",
+        }),
+      );
+    }
 
     if (url.searchParams.get("historyOnly") === "1") {
       const variantsRequested = parseOptionalCount(url, "variantsRequested");
@@ -141,7 +152,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       }
 
       const summary = truncateSyncSummaryForClient(
-        await syncCylindoVariantImagesBySkuList(admin, skus),
+        await syncCylindoVariantImagesBySkuList(admin, skus, syncOptions),
         skus.length,
       );
       const logs = buildBatchProgressLogs(summary);
@@ -182,6 +193,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         admin,
         productId,
         batchIndex,
+        syncOptions,
       );
       const summary = truncateSyncSummaryForClient(batchResult.summary, 50);
       const logs = buildBatchProgressLogs(summary);
@@ -225,7 +237,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     const summary = truncateSyncSummaryForClient(
-      await syncCylindoVariantImagesByProductId(admin, productId),
+      await syncCylindoVariantImagesByProductId(admin, productId, syncOptions),
       50,
     );
 

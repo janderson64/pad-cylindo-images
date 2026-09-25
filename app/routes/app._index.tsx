@@ -41,9 +41,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
   let configError: string | null = null;
+  let defaultFrame = 30;
 
   try {
-    getCylindoConfig();
+    defaultFrame = getCylindoConfig().frame;
   } catch (error) {
     configError =
       error instanceof Error ? error.message : "Missing Cylindo configuration";
@@ -57,7 +58,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.error("Failed to load sync history:", error);
   }
 
-  return json({ configError, syncHistory, maxSkusPerSync: MAX_SKUS_PER_SYNC });
+  return json({ configError, syncHistory, maxSkusPerSync: MAX_SKUS_PER_SYNC, defaultFrame });
 };
 
 export function shouldRevalidate({
@@ -113,9 +114,11 @@ export default function Index() {
   const fetcher = useFetcher<ActionData>();
   const recentSkusFetcher = useFetcher<RecentSkusData>();
   const revalidator = useRevalidator();
-  const { configError, syncHistory, maxSkusPerSync } = useLoaderData<typeof loader>();
+  const { configError, syncHistory, maxSkusPerSync, defaultFrame } =
+    useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
+  const [frameInput, setFrameInput] = useState(String(defaultFrame));
 
   const recentSkus =
     recentSkusFetcher.data?.ok === true ? recentSkusFetcher.data.recentSkus : [];
@@ -149,6 +152,15 @@ export default function Index() {
       return;
     }
 
+    const frame = Number(frameInput);
+
+    if (!Number.isInteger(frame) || frame < 0) {
+      shopify.toast.show("Enter a valid Cylindo frame number (0 or greater)", {
+        isError: true,
+      });
+      return;
+    }
+
     const params = new URLSearchParams(window.location.search);
 
     try {
@@ -163,10 +175,10 @@ export default function Index() {
     }
 
     fetcher.submit(
-      { skus },
+      { skus, frame: String(frame) },
       { method: "POST", action: `/app/sync?${params.toString()}` },
     );
-  }, [fetcher, shopify, skuInput]);
+  }, [fetcher, frameInput, shopify, skuInput]);
 
   useEffect(() => {
     if (fetcher.data?.ok) {
@@ -208,7 +220,8 @@ export default function Index() {
     fetcher.data && (fetcher.data.ok || fetcher.data.summary)
       ? fetcher.data.summary
       : null;
-  const syncDisabled = Boolean(configError) || isLoading || !skuInput.trim();
+  const syncDisabled =
+    Boolean(configError) || isLoading || !skuInput.trim() || !frameInput.trim();
 
   return (
     <Page>
@@ -233,6 +246,14 @@ export default function Index() {
               uploads the image only when the variant does not already have
               one.
             </Text>
+            <TextField
+              label="Cylindo frame"
+              value={frameInput}
+              onChange={setFrameInput}
+              type="number"
+              autoComplete="off"
+              helpText="Frame number used in the Cylindo image URL (for example, 5 or 30)."
+            />
             <TextField
               label="Variant SKUs"
               value={skuInput}

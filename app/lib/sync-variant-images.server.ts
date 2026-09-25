@@ -25,6 +25,10 @@ export type SyncSummary = {
   statusMessage?: string;
 };
 
+export type SyncOptions = {
+  frame?: number;
+};
+
 const MAX_SKUS_PER_SYNC = 150;
 const SYNC_BATCH_SIZE = 50;
 
@@ -393,8 +397,11 @@ async function syncVariant(
   admin: { graphql: AdminGraphql },
   variant: VariantLookup,
   summary: SyncSummary,
+  options?: SyncOptions,
 ): Promise<void> {
-  const config = getCylindoConfig();
+  const config = getCylindoConfig(
+    options?.frame !== undefined ? { frame: options.frame } : undefined,
+  );
   const productMetafields = parseProductMetafields(variant.product.metafields.nodes);
   const enabled = productMetafields.enabled?.trim().toLowerCase();
 
@@ -487,6 +494,7 @@ function mergeSummaries(target: SyncSummary, batch: SyncSummary): void {
 async function syncSkuBatch(
   admin: { graphql: AdminGraphql },
   skus: string[],
+  options?: SyncOptions,
 ): Promise<SyncSummary> {
   const summary = emptySummary();
 
@@ -503,7 +511,7 @@ async function syncSkuBatch(
       continue;
     }
 
-    await syncVariant(admin, variant, summary);
+    await syncVariant(admin, variant, summary, options);
   }
 
   return summary;
@@ -512,6 +520,7 @@ async function syncSkuBatch(
 export async function syncCylindoVariantImagesBySkuList(
   admin: { graphql: AdminGraphql },
   skus: string[],
+  options?: SyncOptions,
 ): Promise<SyncSummary> {
   if (skus.length === 0) {
     const summary = emptySummary();
@@ -528,7 +537,7 @@ export async function syncCylindoVariantImagesBySkuList(
 
   for (let index = 0; index < skus.length; index += SYNC_BATCH_SIZE) {
     const batchSkus = skus.slice(index, index + SYNC_BATCH_SIZE);
-    const batchSummary = await syncSkuBatch(admin, batchSkus);
+    const batchSummary = await syncSkuBatch(admin, batchSkus, options);
     mergeSummaries(summary, batchSummary);
   }
 
@@ -542,9 +551,10 @@ export async function syncCylindoVariantImagesBySkuList(
 export async function syncCylindoVariantImagesByProductId(
   admin: { graphql: AdminGraphql },
   productId: string,
+  options?: SyncOptions,
 ): Promise<SyncSummary> {
   const { productTitle, skus } = await fetchProductVariantSkus(admin, productId);
-  const summary = await syncCylindoVariantImagesBySkuList(admin, skus);
+  const summary = await syncCylindoVariantImagesBySkuList(admin, skus, options);
 
   if (summary.statusMessage === "No variant SKUs to sync.") {
     summary.statusMessage = `${productTitle} has no variant SKUs to sync.`;
@@ -556,6 +566,7 @@ export async function syncCylindoVariantImagesByProductId(
 export async function syncCylindoVariantImagesBySkus(
   admin: { graphql: AdminGraphql },
   skusInput: string,
+  options?: SyncOptions,
 ): Promise<SyncSummary> {
   const skus = parseSkuList(skusInput);
 
@@ -569,7 +580,7 @@ export async function syncCylindoVariantImagesBySkus(
     throw new Error(`Too many SKUs. Sync up to ${MAX_SKUS_PER_SYNC} at a time.`);
   }
 
-  return syncCylindoVariantImagesBySkuList(admin, skus);
+  return syncCylindoVariantImagesBySkuList(admin, skus, options);
 }
 
 export function truncateSyncSummaryForClient(
@@ -619,6 +630,7 @@ export async function syncCylindoVariantImagesByProductIdBatch(
   admin: { graphql: AdminGraphql },
   productId: string,
   batchIndex: number,
+  options?: SyncOptions,
 ): Promise<ProductSyncBatchResult> {
   const { productTitle, skus } = await fetchProductVariantSkus(admin, productId);
   const batchCount = Math.max(1, Math.ceil(skus.length / SYNC_BATCH_SIZE));
@@ -631,7 +643,7 @@ export async function syncCylindoVariantImagesByProductIdBatch(
     batchIndex * SYNC_BATCH_SIZE,
     batchIndex * SYNC_BATCH_SIZE + SYNC_BATCH_SIZE,
   );
-  const summary = await syncSkuBatch(admin, batchSkus);
+  const summary = await syncSkuBatch(admin, batchSkus, options);
   summary.variantsRequested = skus.length;
 
   if (batchCount > 1) {

@@ -3,7 +3,7 @@ import { json } from "@remix-run/node";
 import { useRouteError, type ShouldRevalidateFunctionArgs } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
-import { getCylindoConfig } from "../lib/cylindo-config.server";
+import { getCylindoConfig, parseCylindoFrame } from "../lib/cylindo-config.server";
 import { createSyncJob } from "../lib/sync-history.server";
 import {
   syncCylindoVariantImages,
@@ -35,9 +35,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     const formData = await request.formData();
     const skus = String(formData.get("skus") ?? "");
+    const frame = parseCylindoFrame(formData.get("frame"));
+
+    if (formData.get("frame") && frame === undefined) {
+      return json({
+        ok: false as const,
+        error: "Enter a valid Cylindo frame number (0 or greater).",
+      });
+    }
 
     const summary = truncateSyncSummaryForClient(
-      await syncCylindoVariantImages(admin, skus),
+      await syncCylindoVariantImages(admin, skus, { frame }),
     );
 
     try {

@@ -1,7 +1,7 @@
 {
   "name": "Sync Cylindo images",
   "title": "Sync Cylindo images",
-  "description": "Sync frame 30 Cylindo images for {{count}} variant SKUs on this product. Variants that already have images are skipped.",
+  "description": "Sync Cylindo frame {{frame}} images for {{count}} variant SKUs on this product. Variants that already have images are skipped.",
   "sync": "Sync images",
   "cancel": "Cancel",
   "close": "Close"

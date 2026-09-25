@@ -2,10 +2,28 @@ export type CylindoConfig = {
   accountId: string;
   frame: number;
   size: number;
-  version: number;
 };
 
-export function getCylindoConfig(): CylindoConfig {
+export function parseCylindoFrame(
+  value: FormDataEntryValue | string | null | undefined,
+): number | undefined {
+  const raw =
+    value === null || value === undefined ? "" : String(value).trim();
+
+  if (!raw) {
+    return undefined;
+  }
+
+  const parsed = Number(raw);
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
+export function getCylindoConfig(overrides?: { frame?: number }): CylindoConfig {
   const accountId = process.env.CYLINDO_ACCOUNT_ID?.trim();
 
   if (!accountId) {
@@ -14,10 +32,11 @@ export function getCylindoConfig(): CylindoConfig {
     );
   }
 
+  const defaultFrame = parseInt(process.env.CYLINDO_FRAME ?? "30", 10);
+
   return {
     accountId,
-    frame: parseInt(process.env.CYLINDO_FRAME ?? "30", 10),
+    frame: overrides?.frame ?? defaultFrame,
     size: parseInt(process.env.CYLINDO_SIZE ?? "1024", 10),
-    version: parseInt(process.env.CYLINDO_VERSION ?? "5", 10),
   };
 }
