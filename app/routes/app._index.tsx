@@ -46,10 +46,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
   let configError: string | null = null;
-  let defaultFrame = 30;
 
   try {
-    defaultFrame = getCylindoConfig().frame;
+    getCylindoConfig();
   } catch (error) {
     configError =
       error instanceof Error ? error.message : "Missing Cylindo configuration";
@@ -63,7 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.error("Failed to load sync history:", error);
   }
 
-  return json({ configError, syncHistory, maxSkusPerSync: MAX_SKUS_PER_SYNC, defaultFrame });
+  return json({ configError, syncHistory, maxSkusPerSync: MAX_SKUS_PER_SYNC });
 };
 
 export function shouldRevalidate({
@@ -120,11 +119,11 @@ export default function Index() {
   const previewFetcher = useFetcher<SyncPreviewData>();
   const recentSkusFetcher = useFetcher<RecentSkusData>();
   const revalidator = useRevalidator();
-  const { configError, syncHistory, maxSkusPerSync, defaultFrame } =
+  const { configError, syncHistory, maxSkusPerSync } =
     useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const [skuInput, setSkuInput] = useState("");
-  const [frameInput, setFrameInput] = useState(String(defaultFrame));
+  const [frameInput, setFrameInput] = useState("");
   const [overwriteModalOpen, setOverwriteModalOpen] = useState(false);
   const [overwritePreview, setOverwritePreview] = useState<{
     count: number;

@@ -88,7 +88,7 @@ function Extension() {
   const [skusWithImages, setSkusWithImages] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [syncError, setSyncError] = useState("");
-  const [frame, setFrame] = useState(30);
+  const [frame, setFrame] = useState("");
   const [showOverwriteWarning, setShowOverwriteWarning] = useState(false);
   const [progressMessage, setProgressMessage] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
@@ -187,7 +187,9 @@ function Extension() {
       return;
     }
 
-    if (!Number.isInteger(frame) || frame < 0) {
+    const frameNumber = Number(frame);
+
+    if (!frame.trim() || !Number.isInteger(frameNumber) || frameNumber < 0) {
       setSyncError("Enter a valid Cylindo frame number (0 or greater).");
       return;
     }
@@ -215,7 +217,7 @@ function Extension() {
         const params = new URLSearchParams({
           productId,
           skus: sku,
-          frame: String(frame),
+          frame: String(frameNumber),
         });
 
         if (overwriteExisting) {
@@ -272,6 +274,13 @@ function Extension() {
   }
 
   function handleSyncClick() {
+    const frameNumber = Number(frame);
+
+    if (!frame.trim() || !Number.isInteger(frameNumber) || frameNumber < 0) {
+      setSyncError("Enter a valid Cylindo frame number (0 or greater).");
+      return;
+    }
+
     if (overwriteCount > 0 && !showOverwriteWarning) {
       setShowOverwriteWarning(true);
       setSyncError("");
@@ -323,22 +332,18 @@ function Extension() {
             <s-text type="strong">{productTitle}</s-text>
             <s-number-field
               label="Cylindo frame"
-              value={String(frame)}
+              value={frame}
               min={0}
               step={1}
               inputMode="numeric"
               onChange={(event) => {
-                const next = Number(event.currentTarget.value);
-
-                if (Number.isInteger(next) && next >= 0) {
-                  setFrame(next);
-                }
+                setFrame(event.currentTarget.value);
               }}
             />
             <s-text>
               {i18n.translate("description", {
                 count: skuCount,
-                frame,
+                frame: frame.trim() || "—",
               })}
             </s-text>
             {syncing && progressMessage ? (
@@ -385,7 +390,7 @@ function Extension() {
         <>
           <s-button
             slot="primary-action"
-            disabled={loadingProduct || syncing || skuCount === 0 || Boolean(loadError)}
+            disabled={loadingProduct || syncing || skuCount === 0 || Boolean(loadError) || !frame.trim()}
             onClick={() => handleSyncClick()}
           >
             {syncing ? "Syncing..." : i18n.translate("sync")}
