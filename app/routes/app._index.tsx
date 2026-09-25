@@ -117,6 +117,7 @@ function buildLogRows(summary: SyncSummary) {
 
 export default function Index() {
   const fetcher = useFetcher<ActionData>();
+  const previewFetcher = useFetcher<SyncPreviewData>();
   const recentSkusFetcher = useFetcher<RecentSkusData>();
   const revalidator = useRevalidator();
   const { configError, syncHistory, maxSkusPerSync, defaultFrame } =
@@ -130,6 +131,7 @@ export default function Index() {
     skus: string[];
   } | null>(null);
   const [checkingOverwrite, setCheckingOverwrite] = useState(false);
+  const previewRequestedRef = useRef(false);
 
   const recentSkus =
     recentSkusFetcher.data?.ok === true ? recentSkusFetcher.data.recentSkus : [];
@@ -215,36 +217,40 @@ export default function Index() {
     }
 
     params.set("skus", skus);
+    previewRequestedRef.current = true;
     setCheckingOverwrite(true);
+    previewFetcher.load(`/api/sync-preview?${params.toString()}`);
+  }, [frameInput, previewFetcher, shopify, skuInput]);
 
-    try {
-      const previewResponse = await fetch(`/app/sync-preview?${params.toString()}`);
-      const preview = (await previewResponse.json()) as SyncPreviewData;
-
-      if (!preview.ok) {
-        shopify.toast.show(preview.error, { isError: true });
-        return;
-      }
-
-      if (preview.variantsWithImages > 0) {
-        setOverwritePreview({
-          count: preview.variantsWithImages,
-          skus: preview.skusWithImages,
-        });
-        setOverwriteModalOpen(true);
-        return;
-      }
-
-      await submitSync(false);
-    } catch (error) {
-      shopify.toast.show(
-        error instanceof Error ? error.message : "Could not check existing images",
-        { isError: true },
-      );
-    } finally {
-      setCheckingOverwrite(false);
+  useEffect(() => {
+    if (!previewRequestedRef.current || previewFetcher.state !== "idle") {
+      return;
     }
-  }, [frameInput, shopify, skuInput, submitSync]);
+
+    if (!previewFetcher.data) {
+      return;
+    }
+
+    previewRequestedRef.current = false;
+    setCheckingOverwrite(false);
+    const preview = previewFetcher.data;
+
+    if (!preview.ok) {
+      shopify.toast.show(preview.error, { isError: true });
+      return;
+    }
+
+    if (preview.variantsWithImages > 0) {
+      setOverwritePreview({
+        count: preview.variantsWithImages,
+        skus: preview.skusWithImages,
+      });
+      setOverwriteModalOpen(true);
+      return;
+    }
+
+    void submitSync(false);
+  }, [previewFetcher.data, previewFetcher.state, shopify, submitSync]);
 
   useEffect(() => {
     if (fetcher.data?.ok) {

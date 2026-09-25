@@ -6,6 +6,8 @@ import { boundary } from "@shopify/shopify-app-remix/server";
 import { previewCylindoSync } from "../lib/sync-variant-images.server";
 import { authenticate } from "../shopify.server";
 
+// Resource route outside the /app layout so fetch() and fetcher.load()
+// receive JSON instead of the embedded app HTML shell.
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const { admin } = await authenticate.admin(request);
