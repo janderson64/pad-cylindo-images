@@ -46,6 +46,9 @@ type VariantLookup = {
   id: string;
   sku: string | null;
   image: { id: string } | null;
+  media: {
+    nodes: Array<{ id: string }>;
+  };
   metafield: { jsonValue: unknown } | null;
   product: {
     id: string;
@@ -56,6 +59,16 @@ type VariantLookup = {
   };
 };
 
+function variantHasExistingImage(variant: VariantLookup): boolean {
+  return (
+    Boolean(variant.image?.id) || (variant.media?.nodes?.length ?? 0) > 0
+  );
+}
+
+function getVariantMediaIds(variant: VariantLookup): string[] {
+  return (variant.media?.nodes ?? []).map((node) => node.id).filter(Boolean);
+}
+
 const VARIANT_BY_SKU_QUERY = `#graphql
   query CylindoVariantBySku($query: String!) {
     productVariants(first: 1, query: $query) {
@@ -64,6 +77,11 @@ const VARIANT_BY_SKU_QUERY = `#graphql
         sku
         image {
           id
+        }
+        media(first: 10) {
+          nodes {
+            id
+          }
         }
         metafield(namespace: "cylindo", key: "features_code") {
           jsonValue
@@ -249,19 +267,23 @@ async function waitForMediaReady(
   return "Timed out waiting for Shopify to process the image";
 }
 
-async function detachVariantImage(
+async function detachVariantMedia(
   admin: { graphql: AdminGraphql },
   productId: string,
   variantId: string,
-  mediaId: string,
+  mediaIds: string[],
 ): Promise<string | null> {
+  if (mediaIds.length === 0) {
+    return null;
+  }
+
   const response = await admin.graphql(DETACH_MEDIA_MUTATION, {
     variables: {
       productId,
       variantMedia: [
         {
           variantId,
-          mediaIds: [mediaId],
+          mediaIds,
         },
       ],
     },
@@ -283,14 +305,14 @@ async function attachImageToVariant(
   variantId: string,
   imageUrl: string,
   alt: string,
-  existingImageId?: string | null,
+  existingMediaIds: string[] = [],
 ): Promise<string | null> {
-  if (existingImageId) {
-    const detachError = await detachVariantImage(
+  if (existingMediaIds.length > 0) {
+    const detachError = await detachVariantMedia(
       admin,
       productId,
       variantId,
-      existingImageId,
+      existingMediaIds,
     );
 
     if (detachError) {
@@ -480,7 +502,7 @@ async function syncVariant(
     return;
   }
 
-  const hadExistingImage = Boolean(variant.image?.id);
+  const hadExistingImage = variantHasExistingImage(variant);
 
   if (hadExistingImage && !options?.overwriteExisting) {
     summary.skippedHasImage.push(
@@ -536,7 +558,7 @@ async function syncVariant(
     variant.id,
     urlResult.url,
     alt,
-    options?.overwriteExisting ? variant.image?.id : null,
+    options?.overwriteExisting ? getVariantMediaIds(variant) : [],
   );
 
   if (shopifyError) {
@@ -568,7 +590,7 @@ export async function previewCylindoSync(
   for (const sku of skus) {
     const variant = await fetchVariantBySku(admin, sku);
 
-    if (variant?.image?.id) {
+    if (variant && variantHasExistingImage(variant)) {
       skusWithImages.push(variant.sku ?? sku);
     }
   }

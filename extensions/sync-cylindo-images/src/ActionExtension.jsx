@@ -126,6 +126,11 @@ function Extension() {
                     image {
                       id
                     }
+                    media(first: 1) {
+                      nodes {
+                        id
+                      }
+                    }
                   }
                 }
               }
@@ -162,7 +167,7 @@ function Extension() {
           seen.add(key);
           skus.push(sku);
 
-          if (variant.image?.id) {
+          if (variant.image?.id || (variant.media?.nodes?.length ?? 0) > 0) {
             withImages.push(sku);
           }
         }
