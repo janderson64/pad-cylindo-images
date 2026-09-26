@@ -8,5 +8,11 @@
   "overwriteTitle": "Replace existing variant images?",
   "overwriteMessage": "{{count}} variants on this product already have images. Continuing will replace those images with new Cylindo frame images. This cannot be undone from this app.",
   "overwriteProceed": "Proceed and overwrite",
-  "overwriteSkus": "Affected SKUs: {{skus}}"
+  "overwriteSkus": "Affected SKUs: {{skus}}",
+  "framePreviewLabel": "Preview (first variant: {{sku}}, frame {{frame}})",
+  "framePreviewLoading": "Loading preview...",
+  "framePreviewAlt": "Cylindo frame {{frame}} preview",
+  "framePreviewUnavailable": "Cylindo image not found for this frame and variant.",
+  "framePreviewLoadFailed": "Preview image failed to load.",
+  "framePreviewFailed": "Failed to load frame preview."
 }

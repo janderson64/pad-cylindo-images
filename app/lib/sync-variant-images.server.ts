@@ -35,6 +35,15 @@ export type SyncPreview = {
   skusWithImages: string[];
 };
 
+export type FramePreviewResult =
+  | {
+      ok: true;
+      url: string;
+      sku: string;
+      imageAvailable: boolean;
+    }
+  | { ok: false; error: string };
+
 const MAX_SKUS_PER_SYNC = 150;
 const SYNC_BATCH_SIZE = 50;
 
@@ -157,6 +166,29 @@ const PRODUCT_VARIANT_SKUS_QUERY = `#graphql
         }
         nodes {
           sku
+        }
+      }
+    }
+  }
+`;
+
+const PRODUCT_FRAME_PREVIEW_QUERY = `#graphql
+  query CylindoProductFramePreview($id: ID!) {
+    product(id: $id) {
+      title
+      status
+      metafields(first: 20, namespace: "cylindo") {
+        nodes {
+          key
+          value
+        }
+      }
+      variants(first: 250) {
+        nodes {
+          sku
+          metafield(namespace: "cylindo", key: "features_code") {
+            jsonValue
+          }
         }
       }
     }
@@ -672,6 +704,98 @@ async function syncVariant(
       urlResult.url,
     ),
   );
+}
+
+export async function previewCylindoFrameForProduct(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+  frame: number,
+): Promise<FramePreviewResult> {
+  const response = await admin.graphql(PRODUCT_FRAME_PREVIEW_QUERY, {
+    variables: { id: productId },
+  });
+
+  const body = (await response.json()) as {
+    data?: {
+      product?: {
+        title: string;
+        status: ProductStatus;
+        metafields: { nodes: Array<{ key: string; value: string | null }> };
+        variants: {
+          nodes: Array<{
+            sku: string | null;
+            metafield: { jsonValue: unknown } | null;
+          }>;
+        };
+      } | null;
+    };
+    errors?: Array<{ message: string }>;
+  };
+
+  if (body.errors?.length) {
+    return {
+      ok: false,
+      error: body.errors[0]?.message ?? "GraphQL error",
+    };
+  }
+
+  const product = body.data?.product;
+
+  if (!product) {
+    return { ok: false, error: "Product not found" };
+  }
+
+  if (product.status === "ARCHIVED") {
+    return { ok: false, error: "Product is archived" };
+  }
+
+  const productMetafields = parseProductMetafields(product.metafields.nodes);
+  const enabled = productMetafields.enabled?.trim().toLowerCase();
+
+  if (enabled !== "true" && enabled !== "1") {
+    return {
+      ok: false,
+      error: "Product is not Cylindo-enabled (cylindo.enabled is not true)",
+    };
+  }
+
+  const firstVariant = product.variants.nodes.find((variant) =>
+    Boolean(variant.sku?.trim()),
+  );
+
+  if (!firstVariant?.sku?.trim()) {
+    return { ok: false, error: "No variant SKUs on this product" };
+  }
+
+  const featuresCode = parseFeaturesCode(firstVariant.metafield?.jsonValue);
+
+  if (featuresCode.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Missing variant metafield cylindo.features_code on first variant",
+    };
+  }
+
+  const config = getCylindoConfig({ frame });
+  const urlResult = buildCylindoFrameUrlForVariant(
+    config,
+    productMetafields,
+    featuresCode,
+  );
+
+  if (!urlResult.ok) {
+    return { ok: false, error: urlResult.reason };
+  }
+
+  const imageAvailable = await validateCylindoImageUrl(urlResult.url);
+
+  return {
+    ok: true,
+    url: urlResult.url,
+    sku: firstVariant.sku.trim(),
+    imageAvailable,
+  };
 }
 
 export async function previewCylindoSync(

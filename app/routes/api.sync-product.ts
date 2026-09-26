@@ -11,6 +11,7 @@ import {
 import {
   buildBatchProgressLogs,
   parseSkuList,
+  previewCylindoFrameForProduct,
   previewCylindoSync,
   previewCylindoSyncByProductId,
   syncCylindoVariantImagesByProductId,
@@ -104,6 +105,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const preview = await previewCylindoSyncByProductId(admin, productId);
 
       return cors(json({ ok: true as const, ...preview }));
+    }
+
+    if (url.searchParams.get("framePreview") === "1") {
+      if (frame === undefined) {
+        return cors(
+          json({
+            ok: false as const,
+            error: "Enter a valid Cylindo frame number (0 or greater).",
+          }),
+        );
+      }
+
+      const preview = await previewCylindoFrameForProduct(
+        admin,
+        productId,
+        frame,
+      );
+
+      return cors(json(preview));
     }
 
     if (url.searchParams.get("historyOnly") === "1") {

@@ -8,5 +8,11 @@
   "overwriteTitle": "Remplacer les images de variantes existantes ?",
   "overwriteMessage": "{{count}} variantes de ce produit ont déjà une image. Continuer remplacera ces images par de nouvelles images Cylindo frame. Cette action ne peut pas être annulée depuis cette application.",
   "overwriteProceed": "Continuer et remplacer",
-  "overwriteSkus": "SKU concernés : {{skus}}"
+  "overwriteSkus": "SKU concernés : {{skus}}",
+  "framePreviewLabel": "Aperçu (première variante : {{sku}}, frame {{frame}})",
+  "framePreviewLoading": "Chargement de l'aperçu...",
+  "framePreviewAlt": "Aperçu Cylindo frame {{frame}}",
+  "framePreviewUnavailable": "Image Cylindo introuvable pour cette frame et cette variante.",
+  "framePreviewLoadFailed": "Échec du chargement de l'aperçu.",
+  "framePreviewFailed": "Échec du chargement de l'aperçu de frame."
 }

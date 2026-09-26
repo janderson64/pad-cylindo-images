@@ -89,6 +89,11 @@ function Extension() {
   const [loadError, setLoadError] = useState("");
   const [syncError, setSyncError] = useState("");
   const [frame, setFrame] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewSku, setPreviewSku] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [previewImageError, setPreviewImageError] = useState(false);
   const [showOverwriteWarning, setShowOverwriteWarning] = useState(false);
   const [progressMessage, setProgressMessage] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
@@ -186,6 +191,74 @@ function Extension() {
       }
     })();
   }, [productId]);
+
+  useEffect(() => {
+    if (!productId || loadingProduct || syncing || result) {
+      return;
+    }
+
+    const frameNumber = Number(frame);
+
+    if (!frame.trim() || !Number.isInteger(frameNumber) || frameNumber < 0) {
+      setPreviewUrl("");
+      setPreviewSku("");
+      setPreviewError("");
+      setPreviewImageError(false);
+      setPreviewLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = setTimeout(async () => {
+      setPreviewLoading(true);
+      setPreviewError("");
+      setPreviewImageError(false);
+
+      try {
+        const params = new URLSearchParams({
+          productId,
+          frame: String(frameNumber),
+          framePreview: "1",
+        });
+        const json = await fetchSyncJson(
+          `/api/sync-product?${params.toString()}`,
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        setPreviewUrl(json.url ?? "");
+        setPreviewSku(json.sku ?? "");
+        setPreviewError(
+          json.imageAvailable === false
+            ? i18n.translate("framePreviewUnavailable")
+            : "",
+        );
+      } catch (previewError) {
+        if (cancelled) {
+          return;
+        }
+
+        setPreviewUrl("");
+        setPreviewSku("");
+        setPreviewError(
+          previewError instanceof Error
+            ? previewError.message
+            : i18n.translate("framePreviewFailed"),
+        );
+      } finally {
+        if (!cancelled) {
+          setPreviewLoading(false);
+        }
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [frame, productId, loadingProduct, syncing, result, i18n]);
 
   async function runSync(overwriteExisting) {
     if (!productId || syncing || skuList.length === 0) {
@@ -345,6 +418,39 @@ function Extension() {
                 setFrame(event.currentTarget.value);
               }}
             />
+            {frame.trim() ? (
+              <s-stack direction="block" gap="small">
+                <s-text tone="neutral">
+                  {i18n.translate("framePreviewLabel", {
+                    sku: previewSku || skuList[0] || "—",
+                    frame: frame.trim(),
+                  })}
+                </s-text>
+                {previewLoading ? (
+                  <s-text>{i18n.translate("framePreviewLoading")}</s-text>
+                ) : previewError ? (
+                  <s-text tone="critical">{previewError}</s-text>
+                ) : previewUrl ? (
+                  <>
+                    <s-image
+                      src={previewUrl}
+                      alt={i18n.translate("framePreviewAlt", {
+                        frame: frame.trim(),
+                      })}
+                      aspectRatio="1"
+                      objectFit="contain"
+                      inlineSize="fill"
+                      onError={() => setPreviewImageError(true)}
+                    />
+                    {previewImageError ? (
+                      <s-text tone="critical">
+                        {i18n.translate("framePreviewLoadFailed")}
+                      </s-text>
+                    ) : null}
+                  </>
+                ) : null}
+              </s-stack>
+            ) : null}
             <s-text>
               {i18n.translate("description", {
                 count: skuCount,
