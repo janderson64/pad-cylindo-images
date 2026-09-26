@@ -6,7 +6,10 @@ import {
   isCreatedWithinDays,
 } from "./recent-skus.server";
 
-assert.match(buildRecentProductSearchQuery(30), /^created_at:>=\d{4}-\d{2}-\d{2}$/);
+assert.match(
+  buildRecentProductSearchQuery(30),
+  /^created_at:>=\d{4}-\d{2}-\d{2} -status:archived$/,
+);
 
 const cutoff = getRecentSkuCutoffDate(30);
 assert.equal(cutoff.getUTCHours(), 0);

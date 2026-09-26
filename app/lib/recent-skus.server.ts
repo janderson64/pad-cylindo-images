@@ -23,6 +23,7 @@ const RECENT_VARIANTS_BY_ID_QUERY = `#graphql
         }
         product {
           title
+          status
         }
       }
     }
@@ -38,6 +39,7 @@ const RECENT_PRODUCTS_QUERY = `#graphql
       }
       nodes {
         title
+        status
         createdAt
         variants(first: 100) {
           nodes {
@@ -68,7 +70,7 @@ export function getRecentSkuCutoffDate(days: number): Date {
 export function buildRecentProductSearchQuery(days: number): string {
   const dateFilter = getRecentSkuCutoffDate(days).toISOString().slice(0, 10);
 
-  return `created_at:>=${dateFilter}`;
+  return `created_at:>=${dateFilter} -status:archived`;
 }
 
 export function isCreatedWithinDays(createdAt: string, days: number): boolean {
@@ -115,7 +117,7 @@ async function fetchRecentVariantsByIdScan(
             sku: string | null;
             createdAt: string;
             image: { id: string } | null;
-            product: { title: string };
+            product: { title: string; status: string };
           }>;
         };
       };
@@ -133,6 +135,10 @@ async function fetchRecentVariantsByIdScan(
       const sku = node.sku?.trim();
 
       if (!sku || !isCreatedWithinDays(node.createdAt, days)) {
+        continue;
+      }
+
+      if (node.product.status === "ARCHIVED") {
         continue;
       }
 
@@ -194,6 +200,7 @@ async function fetchRecentVariantsFromNewProducts(
           };
           nodes?: Array<{
             title: string;
+            status: string;
             createdAt: string;
             variants: {
               nodes: Array<{
@@ -215,6 +222,10 @@ async function fetchRecentVariantsFromNewProducts(
     const nodes = connection?.nodes ?? [];
 
     for (const product of nodes) {
+      if (product.status === "ARCHIVED") {
+        continue;
+      }
+
       for (const variant of product.variants.nodes) {
         const sku = variant.sku?.trim();
 

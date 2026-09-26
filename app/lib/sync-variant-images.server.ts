@@ -42,6 +42,14 @@ export { MAX_SKUS_PER_SYNC, SYNC_BATCH_SIZE };
 
 type AdminGraphql = AdminApiContext["graphql"];
 
+type ProductStatus = "ACTIVE" | "ARCHIVED" | "DRAFT";
+
+export type SkuVariantLookupResult =
+  | { ok: true; variant: VariantLookup }
+  | { ok: false; reason: "not_found" | "archived_only" };
+
+const MAX_VARIANTS_PER_SKU_LOOKUP = 25;
+
 type VariantLookup = {
   id: string;
   sku: string | null;
@@ -53,11 +61,38 @@ type VariantLookup = {
   product: {
     id: string;
     title: string;
+    status: ProductStatus;
     metafields: {
       nodes: Array<{ key: string; value: string | null }>;
     };
   };
 };
+
+export function isSyncableProductStatus(status: string): boolean {
+  return status === "ACTIVE" || status === "DRAFT";
+}
+
+export function selectSyncableVariant(
+  variants: VariantLookup[],
+): SkuVariantLookupResult {
+  if (variants.length === 0) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const syncableVariant = variants.find((variant) =>
+    isSyncableProductStatus(variant.product.status),
+  );
+
+  if (syncableVariant) {
+    return { ok: true, variant: syncableVariant };
+  }
+
+  if (variants.some((variant) => variant.product.status === "ARCHIVED")) {
+    return { ok: false, reason: "archived_only" };
+  }
+
+  return { ok: false, reason: "not_found" };
+}
 
 function variantHasExistingImage(variant: VariantLookup): boolean {
   return (
@@ -70,8 +105,8 @@ function getVariantMediaIds(variant: VariantLookup): string[] {
 }
 
 const VARIANT_BY_SKU_QUERY = `#graphql
-  query CylindoVariantBySku($query: String!) {
-    productVariants(first: 1, query: $query) {
+  query CylindoVariantBySku($query: String!, $first: Int!) {
+    productVariants(first: $first, query: $query) {
       nodes {
         id
         sku
@@ -89,6 +124,7 @@ const VARIANT_BY_SKU_QUERY = `#graphql
         product {
           id
           title
+          status
           metafields(first: 20, namespace: "cylindo") {
             nodes {
               key
@@ -97,6 +133,15 @@ const VARIANT_BY_SKU_QUERY = `#graphql
           }
         }
       }
+    }
+  }
+`;
+
+const PRODUCT_BY_ID_QUERY = `#graphql
+  query CylindoProductById($id: ID!) {
+    product(id: $id) {
+      title
+      status
     }
   }
 `;
@@ -375,9 +420,12 @@ async function attachImageToVariant(
 async function fetchVariantBySku(
   admin: { graphql: AdminGraphql },
   sku: string,
-): Promise<VariantLookup | null> {
+): Promise<SkuVariantLookupResult> {
   const response = await admin.graphql(VARIANT_BY_SKU_QUERY, {
-    variables: { query: buildSkuSearchQuery(sku) },
+    variables: {
+      query: buildSkuSearchQuery(sku),
+      first: MAX_VARIANTS_PER_SKU_LOOKUP,
+    },
   });
 
   const json = (await response.json()) as {
@@ -397,7 +445,53 @@ async function fetchVariantBySku(
     );
   }
 
-  return json.data?.productVariants?.nodes?.[0] ?? null;
+  return selectSyncableVariant(json.data?.productVariants?.nodes ?? []);
+}
+
+async function fetchProductStatus(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+): Promise<{ productTitle: string; status: ProductStatus | null }> {
+  const response = await admin.graphql(PRODUCT_BY_ID_QUERY, {
+    variables: { id: productId },
+  });
+
+  const json = (await response.json()) as {
+    errors?: Array<{ message?: string }>;
+    data?: {
+      product?: {
+        title?: string;
+        status?: ProductStatus;
+      };
+    };
+  };
+
+  if (json.errors?.length) {
+    throw new Error(
+      json.errors.map((error) => error.message ?? "GraphQL error").join("; "),
+    );
+  }
+
+  const product = json.data?.product;
+
+  if (!product) {
+    throw new Error("Product not found");
+  }
+
+  return {
+    productTitle: product.title ?? "",
+    status: product.status ?? null,
+  };
+}
+
+function skuLookupFailureMessage(
+  reason: Extract<SkuVariantLookupResult, { ok: false }>["reason"],
+): string {
+  if (reason === "archived_only") {
+    return "SKU only found on archived products";
+  }
+
+  return "No variant found with this SKU on active or draft products";
 }
 
 async function fetchProductVariantSkus(
@@ -588,10 +682,20 @@ export async function previewCylindoSync(
   const skusWithImages: string[] = [];
 
   for (const sku of skus) {
-    const variant = await fetchVariantBySku(admin, sku);
+    const lookup = await fetchVariantBySku(admin, sku);
 
-    if (variant && variantHasExistingImage(variant)) {
-      skusWithImages.push(variant.sku ?? sku);
+    if (!lookup.ok) {
+      summary.failed.push({
+        productTitle: lookup.reason === "archived_only" ? "(archived)" : "(not found)",
+        sku,
+        variantId: "",
+        message: skuLookupFailureMessage(lookup.reason),
+      });
+      continue;
+    }
+
+    if (lookup.ok && variantHasExistingImage(lookup.variant)) {
+      skusWithImages.push(lookup.variant.sku ?? sku);
     }
   }
 
@@ -624,19 +728,19 @@ async function syncSkuBatch(
   const summary = emptySummary();
 
   for (const sku of skus) {
-    const variant = await fetchVariantBySku(admin, sku);
+    const lookup = await fetchVariantBySku(admin, sku);
 
-    if (!variant) {
+    if (!lookup.ok) {
       summary.failed.push({
-        productTitle: "(not found)",
+        productTitle: lookup.reason === "archived_only" ? "(archived)" : "(not found)",
         sku,
         variantId: "",
-        message: "No variant found with this SKU",
+        message: skuLookupFailureMessage(lookup.reason),
       });
       continue;
     }
 
-    await syncVariant(admin, variant, summary, options);
+    await syncVariant(admin, lookup.variant, summary, options);
   }
 
   return summary;
@@ -679,6 +783,15 @@ export async function syncCylindoVariantImagesByProductId(
   options?: SyncOptions,
 ): Promise<SyncSummary> {
   const { productTitle, skus } = await fetchProductVariantSkus(admin, productId);
+  const { status } = await fetchProductStatus(admin, productId);
+
+  if (status === "ARCHIVED") {
+    const summary = emptySummary();
+    summary.variantsRequested = skus.length;
+    summary.statusMessage = `${productTitle} is archived and was not synced.`;
+    return summary;
+  }
+
   const summary = await syncCylindoVariantImagesBySkuList(admin, skus, options);
 
   if (summary.statusMessage === "No variant SKUs to sync.") {
