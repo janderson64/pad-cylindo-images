@@ -113,6 +113,20 @@ function getVariantMediaIds(variant: VariantLookup): string[] {
   return (variant.media?.nodes ?? []).map((node) => node.id).filter(Boolean);
 }
 
+function getReplaceableMediaIds(variant: VariantLookup): string[] {
+  const ids = getVariantMediaIds(variant);
+
+  if (variant.image?.id && !ids.includes(variant.image.id)) {
+    ids.push(variant.image.id);
+  }
+
+  return ids;
+}
+
+function mediaIdsForDetach(mediaIds: string[]): string[] {
+  return mediaIds.filter((id) => id.includes("/MediaImage/"));
+}
+
 const VARIANT_BY_SKU_QUERY = `#graphql
   query CylindoVariantBySku($query: String!, $first: Int!) {
     productVariants(first: $first, query: $query) {
@@ -255,6 +269,19 @@ const DETACH_MEDIA_MUTATION = `#graphql
   }
 `;
 
+const DELETE_MEDIA_MUTATION = `#graphql
+  mutation CylindoProductDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
+    productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+      deletedMediaIds
+      deletedProductImageIds
+      mediaUserErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 function entry(
   productTitle: string,
   variant: { id: string; sku: string | null },
@@ -376,6 +403,32 @@ async function detachVariantMedia(
   return null;
 }
 
+async function deleteProductMedia(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+  mediaIds: string[],
+): Promise<string | null> {
+  if (mediaIds.length === 0) {
+    return null;
+  }
+
+  const response = await admin.graphql(DELETE_MEDIA_MUTATION, {
+    variables: {
+      productId,
+      mediaIds,
+    },
+  });
+
+  const json = await response.json();
+  const errors = json.data?.productDeleteMedia?.mediaUserErrors ?? [];
+
+  if (errors.length > 0) {
+    return errors.map((error: { message: string }) => error.message).join("; ");
+  }
+
+  return null;
+}
+
 async function attachImageToVariant(
   admin: { graphql: AdminGraphql },
   productId: string,
@@ -385,15 +438,29 @@ async function attachImageToVariant(
   existingMediaIds: string[] = [],
 ): Promise<string | null> {
   if (existingMediaIds.length > 0) {
-    const detachError = await detachVariantMedia(
+    const detachIds = mediaIdsForDetach(existingMediaIds);
+
+    if (detachIds.length > 0) {
+      const detachError = await detachVariantMedia(
+        admin,
+        productId,
+        variantId,
+        detachIds,
+      );
+
+      if (detachError) {
+        return detachError;
+      }
+    }
+
+    const deleteError = await deleteProductMedia(
       admin,
       productId,
-      variantId,
       existingMediaIds,
     );
 
-    if (detachError) {
-      return detachError;
+    if (deleteError) {
+      return deleteError;
     }
   }
   const createResponse = await admin.graphql(CREATE_MEDIA_MUTATION, {
@@ -684,7 +751,7 @@ async function syncVariant(
     variant.id,
     urlResult.url,
     alt,
-    options?.overwriteExisting ? getVariantMediaIds(variant) : [],
+    options?.overwriteExisting ? getReplaceableMediaIds(variant) : [],
   );
 
   if (shopifyError) {
@@ -699,7 +766,7 @@ async function syncVariant(
       variant.product.title,
       variant,
       hadExistingImage
-        ? "Replaced existing variant image with Cylindo frame image"
+        ? "Replaced existing variant image and removed previous media from gallery"
         : "Synced Cylindo frame image",
       urlResult.url,
     ),
