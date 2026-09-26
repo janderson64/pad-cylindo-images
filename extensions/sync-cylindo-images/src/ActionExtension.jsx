@@ -2,9 +2,62 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 
-import { APP_URL } from "./config.js";
-
 const MAX_VISIBLE_LOGS = 50;
+
+function normalizeAppApiPath(path) {
+  const trimmed = path.startsWith("/") ? path.slice(1) : path;
+  return trimmed.startsWith("api/") ? trimmed : `api/${trimmed}`;
+}
+
+async function parseAppJsonResponse(response, fallbackError) {
+  const responseText = await response.text();
+  let json;
+
+  try {
+    json = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    const trimmed = responseText.trim();
+
+    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+      throw new Error(
+        "App returned a login page instead of data. Open the Cylindo app in Shopify Admin once, then try again.",
+      );
+    }
+
+    throw new Error(`${fallbackError} (HTTP ${response.status}).`);
+  }
+
+  return json;
+}
+
+async function fetchAppJson(path, { onHeartbeat, requireOk = true } = {}) {
+  const startedAt = Date.now();
+  const heartbeat = onHeartbeat
+    ? setInterval(() => {
+        onHeartbeat(Math.floor((Date.now() - startedAt) / 1000));
+      }, 2000)
+    : null;
+
+  try {
+    // Extension fetch resolves against the app URL and adds auth automatically.
+    const response = await fetch(normalizeAppApiPath(path));
+    const json = await parseAppJsonResponse(response, "Request failed");
+
+    if (!response.ok) {
+      throw new Error(json.error ?? `Request failed (${response.status}).`);
+    }
+
+    if (requireOk && json.ok === false) {
+      throw new Error(json.error ?? "Request failed.");
+    }
+
+    return json;
+  } finally {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+  }
+}
 
 export default async () => {
   render(<Extension />, document.body);
@@ -39,94 +92,11 @@ function flushUi() {
 }
 
 async function fetchSyncJson(path, onHeartbeat) {
-  const startedAt = Date.now();
-  const heartbeat = onHeartbeat
-    ? setInterval(() => {
-        onHeartbeat(Math.floor((Date.now() - startedAt) / 1000));
-      }, 2000)
-    : null;
-
-  try {
-    const token = await shopify.auth.idToken();
-
-    if (!token) {
-      throw new Error("Could not authenticate with the app.");
-    }
-
-    const url = path.startsWith("http") ? path : `${APP_URL}${path}`;
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    const contentType = response.headers.get("content-type") ?? "";
-    const responseText = await response.text();
-
-    if (!contentType.includes("application/json")) {
-      throw new Error(
-        response.ok
-          ? "Unexpected sync response format."
-          : `Sync request failed (${response.status}).`,
-      );
-    }
-
-    let json;
-
-    try {
-      json = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      throw new Error("Sync response was not valid JSON.");
-    }
-
-    if (!response.ok || !json.ok) {
-      throw new Error(json.error ?? "Sync failed.");
-    }
-
-    return json;
-  } finally {
-    if (heartbeat) {
-      clearInterval(heartbeat);
-    }
-  }
+  return fetchAppJson(path, { onHeartbeat, requireOk: true });
 }
 
 async function fetchFramePreviewJson(path) {
-  const token = await shopify.auth.idToken();
-
-  if (!token) {
-    throw new Error("Could not authenticate with the app.");
-  }
-
-  const url = path.startsWith("http") ? path : `${APP_URL}${path}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  const contentType = response.headers.get("content-type") ?? "";
-  const responseText = await response.text();
-
-  if (!contentType.includes("application/json")) {
-    throw new Error(
-      response.ok
-        ? "Unexpected sync response format."
-        : `Preview request failed (${response.status}).`,
-    );
-  }
-
-  let json;
-
-  try {
-    json = responseText ? JSON.parse(responseText) : {};
-  } catch {
-    throw new Error("Preview response was not valid JSON.");
-  }
-
-  if (!response.ok) {
-    throw new Error(json.error ?? "Preview request failed.");
-  }
-
-  return json;
+  return fetchAppJson(path, { requireOk: false });
 }
 
 function Extension() {
@@ -276,7 +246,7 @@ function Extension() {
           framePreview: "1",
         });
         const json = await fetchFramePreviewJson(
-          `/api/sync-product?${params.toString()}`,
+          `api/sync-product?${params.toString()}`,
         );
 
         if (cancelled) {
@@ -382,7 +352,7 @@ function Extension() {
         }
 
         const json = await fetchSyncJson(
-          `/api/sync-product?${params.toString()}`,
+          `api/sync-product?${params.toString()}`,
           (elapsedSeconds) => {
             setProgressMessage(
               `Processing ${position} of ${skusToSync.length}: ${sku} (${elapsedSeconds}s)`,
@@ -417,7 +387,7 @@ function Extension() {
         historyParams.set("statusMessage", merged.statusMessage);
       }
 
-      await fetchSyncJson(`/api/sync-product?${historyParams.toString()}`);
+      await fetchSyncJson(`api/sync-product?${historyParams.toString()}`);
 
       appendLogs(["Sync complete."]);
       setProgressMessage("Sync complete.");

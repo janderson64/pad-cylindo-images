@@ -51,7 +51,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ({ admin, session, cors } = await authenticate.admin(request));
   } catch (error) {
     console.error("Sync product loader authentication failed:", error);
-    throw error;
+
+    return json(
+      {
+        ok: false as const,
+        error:
+          error instanceof Response
+            ? "Authentication failed. Open the Cylindo app in Shopify Admin, then try again."
+            : error instanceof Error
+              ? error.message
+              : "Authentication failed",
+      },
+      {
+        status: error instanceof Response ? error.status : 401,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers":
+            "X-Shopify-API-Request-Failure-Reauthorize-Url",
+        },
+      },
+    );
   }
 
   try {
