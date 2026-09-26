@@ -2,25 +2,61 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 
+import {
+  buildCylindoFrameUrlForVariant,
+  parseFeaturesCode,
+  parseProductMetafields,
+} from "./cylindo.js";
+import { APP_URL, CYLINDO_ACCOUNT_ID, CYLINDO_SIZE } from "./config.js";
+
 const MAX_VISIBLE_LOGS = 50;
+const PRODUCT_PREVIEW_QUERY = `query ProductCylindoPreview($id: ID!) {
+  product(id: $id) {
+    title
+    metafields(first: 20, namespace: "cylindo") {
+      nodes {
+        key
+        value
+      }
+    }
+    variants(first: 250) {
+      nodes {
+        sku
+        image {
+          id
+        }
+        media(first: 1) {
+          nodes {
+            id
+          }
+        }
+        metafield(namespace: "cylindo", key: "features_code") {
+          jsonValue
+        }
+      }
+    }
+  }
+}`;
 
 function normalizeAppApiPath(path) {
   const trimmed = path.startsWith("/") ? path.slice(1) : path;
   return trimmed.startsWith("api/") ? trimmed : `api/${trimmed}`;
 }
 
-async function parseAppJsonResponse(response, fallbackError) {
-  const responseText = await response.text();
+function looksLikeHtml(responseText) {
+  const trimmed = responseText.trim();
+  return trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html");
+}
+
+async function parseAppJsonResponse(response, responseText, fallbackError) {
   let json;
 
   try {
     json = responseText ? JSON.parse(responseText) : {};
   } catch {
-    const trimmed = responseText.trim();
-
-    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+    if (looksLikeHtml(responseText)) {
       throw new Error(
-        "App returned a login page instead of data. Open the Cylindo app in Shopify Admin once, then try again.",
+        "Could not reach the Cylindo app backend. Open the Cylindo app in Shopify Admin once, then try syncing again.",
       );
     }
 
@@ -28,6 +64,34 @@ async function parseAppJsonResponse(response, fallbackError) {
   }
 
   return json;
+}
+
+async function fetchAuthenticatedAppResponse(path) {
+  const normalizedPath = normalizeAppApiPath(path);
+  let response = await fetch(normalizedPath);
+  let responseText = await response.text();
+
+  if (!looksLikeHtml(responseText)) {
+    return { response, responseText };
+  }
+
+  const token = await shopify.auth.idToken();
+
+  if (!token) {
+    throw new Error("Could not authenticate with the app.");
+  }
+
+  const authenticatedUrl = new URL(`${APP_URL}/${normalizedPath}`);
+  authenticatedUrl.searchParams.set("id_token", token);
+
+  response = await fetch(authenticatedUrl.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  responseText = await response.text();
+
+  return { response, responseText };
 }
 
 async function fetchAppJson(path, { onHeartbeat, requireOk = true } = {}) {
@@ -39,9 +103,12 @@ async function fetchAppJson(path, { onHeartbeat, requireOk = true } = {}) {
     : null;
 
   try {
-    // Extension fetch resolves against the app URL and adds auth automatically.
-    const response = await fetch(normalizeAppApiPath(path));
-    const json = await parseAppJsonResponse(response, "Request failed");
+    const { response, responseText } = await fetchAuthenticatedAppResponse(path);
+    const json = await parseAppJsonResponse(
+      response,
+      responseText,
+      "Request failed",
+    );
 
     if (!response.ok) {
       throw new Error(json.error ?? `Request failed (${response.status}).`);
@@ -95,10 +162,6 @@ async function fetchSyncJson(path, onHeartbeat) {
   return fetchAppJson(path, { onHeartbeat, requireOk: true });
 }
 
-async function fetchFramePreviewJson(path) {
-  return fetchAppJson(path, { requireOk: false });
-}
-
 function Extension() {
   const { i18n, close, data } = shopify;
   const productId = data.selected[0]?.id;
@@ -113,9 +176,10 @@ function Extension() {
   const [frame, setFrame] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewSku, setPreviewSku] = useState("");
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const [previewImageError, setPreviewImageError] = useState(false);
+  const [productMetafields, setProductMetafields] = useState(null);
+  const [firstPreviewVariant, setFirstPreviewVariant] = useState(null);
   const [showOverwriteWarning, setShowOverwriteWarning] = useState(false);
   const [progressMessage, setProgressMessage] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
@@ -147,24 +211,7 @@ function Extension() {
         const response = await fetch("shopify:admin/api/graphql.json", {
           method: "POST",
           body: JSON.stringify({
-            query: `query ProductVariantSkus($id: ID!) {
-              product(id: $id) {
-                title
-                variants(first: 250) {
-                  nodes {
-                    sku
-                    image {
-                      id
-                    }
-                    media(first: 1) {
-                      nodes {
-                        id
-                      }
-                    }
-                  }
-                }
-              }
-            }`,
+            query: PRODUCT_PREVIEW_QUERY,
             variables: { id: productId },
           }),
         });
@@ -177,9 +224,22 @@ function Extension() {
           return;
         }
 
+        const metafields = parseProductMetafields(
+          product.metafields?.nodes ?? [],
+        );
+        const enabled = metafields.enabled?.trim().toLowerCase();
+
+        if (enabled !== "true" && enabled !== "1") {
+          setLoadError(
+            "Product is not Cylindo-enabled (cylindo.enabled is not true).",
+          );
+          return;
+        }
+
         const seen = new Set();
         const skus = [];
         const withImages = [];
+        let previewVariant = null;
 
         for (const variant of product.variants?.nodes ?? []) {
           const sku = variant.sku?.trim();
@@ -200,9 +260,18 @@ function Extension() {
           if (variant.image?.id || (variant.media?.nodes?.length ?? 0) > 0) {
             withImages.push(sku);
           }
+
+          if (!previewVariant) {
+            previewVariant = {
+              sku,
+              featuresCode: parseFeaturesCode(variant.metafield?.jsonValue),
+            };
+          }
         }
 
         setProductTitle(product.title ?? "");
+        setProductMetafields(metafields);
+        setFirstPreviewVariant(previewVariant);
         setSkuList(skus);
         setSkusWithImages(withImages);
       } catch (loadError) {
@@ -218,7 +287,7 @@ function Extension() {
   }, [productId]);
 
   useEffect(() => {
-    if (!productId || loadingProduct || syncing || result) {
+    if (!productId || loadingProduct || syncing || result || !productMetafields) {
       return;
     }
 
@@ -229,68 +298,57 @@ function Extension() {
       setPreviewSku("");
       setPreviewError("");
       setPreviewImageError(false);
-      setPreviewLoading(false);
       return;
     }
 
-    let cancelled = false;
-    const timeout = setTimeout(async () => {
-      setPreviewLoading(true);
-      setPreviewError("");
+    if (!firstPreviewVariant?.sku) {
+      setPreviewUrl("");
+      setPreviewSku("");
+      setPreviewError("No variant SKUs on this product.");
       setPreviewImageError(false);
+      return;
+    }
 
-      try {
-        const params = new URLSearchParams({
-          productId,
-          frame: String(frameNumber),
-          framePreview: "1",
-        });
-        const json = await fetchFramePreviewJson(
-          `api/sync-product?${params.toString()}`,
-        );
+    if (firstPreviewVariant.featuresCode.length === 0) {
+      setPreviewUrl("");
+      setPreviewSku(firstPreviewVariant.sku);
+      setPreviewError(
+        "Missing variant metafield cylindo.features_code on first variant.",
+      );
+      setPreviewImageError(false);
+      return;
+    }
 
-        if (cancelled) {
-          return;
-        }
+    const urlResult = buildCylindoFrameUrlForVariant(
+      {
+        accountId: CYLINDO_ACCOUNT_ID,
+        frame: frameNumber,
+        size: CYLINDO_SIZE,
+      },
+      productMetafields,
+      firstPreviewVariant.featuresCode,
+    );
 
-        if (!json.ok) {
-          setPreviewUrl("");
-          setPreviewSku("");
-          setPreviewError(json.error ?? i18n.translate("framePreviewFailed"));
-          return;
-        }
+    setPreviewImageError(false);
+    setPreviewSku(firstPreviewVariant.sku);
 
-        setPreviewUrl(json.url ?? "");
-        setPreviewSku(json.sku ?? "");
-        setPreviewError(
-          json.imageAvailable === false
-            ? i18n.translate("framePreviewUnavailable")
-            : "",
-        );
-      } catch (previewError) {
-        if (cancelled) {
-          return;
-        }
+    if (!urlResult.ok) {
+      setPreviewUrl("");
+      setPreviewError(urlResult.reason);
+      return;
+    }
 
-        setPreviewUrl("");
-        setPreviewSku("");
-        setPreviewError(
-          previewError instanceof Error
-            ? previewError.message
-            : i18n.translate("framePreviewFailed"),
-        );
-      } finally {
-        if (!cancelled) {
-          setPreviewLoading(false);
-        }
-      }
-    }, 400);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timeout);
-    };
-  }, [frame, productId, loadingProduct, syncing, result, i18n]);
+    setPreviewUrl(urlResult.url);
+    setPreviewError("");
+  }, [
+    frame,
+    productId,
+    loadingProduct,
+    syncing,
+    result,
+    productMetafields,
+    firstPreviewVariant,
+  ]);
 
   async function runSync(overwriteExisting) {
     if (!productId || syncing || skuList.length === 0) {
@@ -477,9 +535,7 @@ function Extension() {
                     frame: frame.trim(),
                   })}
                 </s-text>
-                {previewLoading ? (
-                  <s-text>{i18n.translate("framePreviewLoading")}</s-text>
-                ) : previewError ? (
+                {previewError ? (
                   <s-text tone="critical">{previewError}</s-text>
                 ) : previewUrl ? (
                   <>
