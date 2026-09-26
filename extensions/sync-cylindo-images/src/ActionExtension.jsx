@@ -2,6 +2,8 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 
+import { APP_URL } from "./config.js";
+
 const MAX_VISIBLE_LOGS = 50;
 
 export default async () => {
@@ -36,7 +38,7 @@ function flushUi() {
   });
 }
 
-async function fetchSyncJson(url, onHeartbeat) {
+async function fetchSyncJson(path, onHeartbeat) {
   const startedAt = Date.now();
   const heartbeat = onHeartbeat
     ? setInterval(() => {
@@ -45,7 +47,18 @@ async function fetchSyncJson(url, onHeartbeat) {
     : null;
 
   try {
-    const response = await fetch(url);
+    const token = await shopify.auth.idToken();
+
+    if (!token) {
+      throw new Error("Could not authenticate with the app.");
+    }
+
+    const url = path.startsWith("http") ? path : `${APP_URL}${path}`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
     const contentType = response.headers.get("content-type") ?? "";
     const responseText = await response.text();
 
@@ -75,6 +88,45 @@ async function fetchSyncJson(url, onHeartbeat) {
       clearInterval(heartbeat);
     }
   }
+}
+
+async function fetchFramePreviewJson(path) {
+  const token = await shopify.auth.idToken();
+
+  if (!token) {
+    throw new Error("Could not authenticate with the app.");
+  }
+
+  const url = path.startsWith("http") ? path : `${APP_URL}${path}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const responseText = await response.text();
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      response.ok
+        ? "Unexpected sync response format."
+        : `Preview request failed (${response.status}).`,
+    );
+  }
+
+  let json;
+
+  try {
+    json = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    throw new Error("Preview response was not valid JSON.");
+  }
+
+  if (!response.ok) {
+    throw new Error(json.error ?? "Preview request failed.");
+  }
+
+  return json;
 }
 
 function Extension() {
@@ -223,11 +275,18 @@ function Extension() {
           frame: String(frameNumber),
           framePreview: "1",
         });
-        const json = await fetchSyncJson(
+        const json = await fetchFramePreviewJson(
           `/api/sync-product?${params.toString()}`,
         );
 
         if (cancelled) {
+          return;
+        }
+
+        if (!json.ok) {
+          setPreviewUrl("");
+          setPreviewSku("");
+          setPreviewError(json.error ?? i18n.translate("framePreviewFailed"));
           return;
         }
 

@@ -1,6 +1,5 @@
 import '@shopify/ui-extensions';
 
-//@ts-ignore
 declare module './src/ActionExtension.jsx' {
   const shopify: import('@shopify/ui-extensions/admin.product-details.action.render').Api;
   const globalThis: { shopify: typeof shopify };
@@ -8,6 +7,5 @@ declare module './src/ActionExtension.jsx' {
 
 //@ts-ignore
 declare module './src/config.js' {
-  const shopify: import('@shopify/ui-extensions/admin.product-details.action.render').Api;
-  const globalThis: { shopify: typeof shopify };
+  export const APP_URL: string;
 }
