@@ -101,6 +101,9 @@ function Extension() {
 
   const skuCount = skuList.length;
   const overwriteCount = skusWithImages.length;
+  const skusWithImagesSet = new Set(
+    skusWithImages.map((sku) => sku.toLowerCase()),
+  );
 
   function appendLogs(messages) {
     if (!messages.length) {
@@ -272,24 +275,41 @@ function Extension() {
       return;
     }
 
+    const skusToSync = overwriteExisting
+      ? skuList
+      : skuList.filter((sku) => !skusWithImagesSet.has(sku.toLowerCase()));
+
+    if (skusToSync.length === 0) {
+      setSyncError("All variants on this product already have images.");
+      setShowOverwriteWarning(false);
+      return;
+    }
+
     const merged = emptySummary();
-    merged.variantsRequested = skuList.length;
+    merged.variantsRequested = skusToSync.length;
 
     setSyncing(true);
     setSyncError("");
     setShowOverwriteWarning(false);
     setProgressMessage("Starting sync...");
     setSyncLogs([]);
-    appendLogs([`Starting sync for ${skuList.length} variant SKUs.`]);
+    appendLogs([`Starting sync for ${skusToSync.length} variant SKUs.`]);
+    if (!overwriteExisting && overwriteCount > 0) {
+      appendLogs([
+        `Skipping ${overwriteCount} variant SKU(s) that already have images.`,
+      ]);
+    }
     await flushUi();
 
     try {
-      for (let index = 0; index < skuList.length; index += 1) {
-        const sku = skuList[index];
+      for (let index = 0; index < skusToSync.length; index += 1) {
+        const sku = skusToSync[index];
         const position = index + 1;
 
-        setProgressMessage(`Processing ${position} of ${skuList.length}: ${sku}`);
-        appendLogs([`Checking ${sku} (${position}/${skuList.length})...`]);
+        setProgressMessage(
+          `Processing ${position} of ${skusToSync.length}: ${sku}`,
+        );
+        appendLogs([`Checking ${sku} (${position}/${skusToSync.length})...`]);
         await flushUi();
 
         const params = new URLSearchParams({
@@ -306,7 +326,7 @@ function Extension() {
           `/api/sync-product?${params.toString()}`,
           (elapsedSeconds) => {
             setProgressMessage(
-              `Processing ${position} of ${skuList.length}: ${sku} (${elapsedSeconds}s)`,
+              `Processing ${position} of ${skusToSync.length}: ${sku} (${elapsedSeconds}s)`,
             );
           },
         );
@@ -316,14 +336,16 @@ function Extension() {
         await flushUi();
       }
 
-      if (skuList.length > 1) {
-        merged.statusMessage = `Processed ${skuList.length} SKUs one at a time.`;
+      if (skusToSync.length > 1) {
+        merged.statusMessage = `Processed ${skusToSync.length} SKUs one at a time.`;
+      } else if (!overwriteExisting && overwriteCount > 0) {
+        merged.statusMessage = `Skipped ${overwriteCount} variant SKU(s) with existing images.`;
       }
 
       const historyParams = new URLSearchParams({
         productId,
         historyOnly: "1",
-        variantsRequested: String(skuList.length),
+        variantsRequested: String(skusToSync.length),
         syncedCount: String(merged.synced.length),
         skippedHasImageCount: String(merged.skippedHasImage.length),
         skippedMissingMetafieldsCount: String(
@@ -488,6 +510,13 @@ function Extension() {
             onClick={() => void runSync(true)}
           >
             {i18n.translate("overwriteProceed")}
+          </s-button>
+          <s-button
+            slot="secondary-actions"
+            disabled={syncing}
+            onClick={() => void runSync(false)}
+          >
+            {i18n.translate("overwriteSkip")}
           </s-button>
           <s-button
             slot="secondary-actions"
