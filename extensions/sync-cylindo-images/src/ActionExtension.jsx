@@ -7,7 +7,8 @@ import {
   parseFeaturesCode,
   parseProductMetafields,
 } from "./cylindo.js";
-import { APP_URL, CYLINDO_ACCOUNT_ID, CYLINDO_SIZE } from "./config.js";
+import { CYLINDO_ACCOUNT_ID, CYLINDO_SIZE } from "./config.js";
+import { syncCylindoVariant } from "./sync-variant.js";
 
 const MAX_VISIBLE_LOGS = 50;
 const PRODUCT_PREVIEW_QUERY = `query ProductCylindoPreview($id: ID!) {
@@ -21,11 +22,12 @@ const PRODUCT_PREVIEW_QUERY = `query ProductCylindoPreview($id: ID!) {
     }
     variants(first: 250) {
       nodes {
+        id
         sku
         image {
           id
         }
-        media(first: 1) {
+        media(first: 10) {
           nodes {
             id
           }
@@ -37,94 +39,6 @@ const PRODUCT_PREVIEW_QUERY = `query ProductCylindoPreview($id: ID!) {
     }
   }
 }`;
-
-function normalizeAppApiPath(path) {
-  const trimmed = path.startsWith("/") ? path.slice(1) : path;
-  return trimmed.startsWith("api/") ? trimmed : `api/${trimmed}`;
-}
-
-function looksLikeHtml(responseText) {
-  const trimmed = responseText.trim();
-  return trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html");
-}
-
-async function parseAppJsonResponse(response, responseText, fallbackError) {
-  let json;
-
-  try {
-    json = responseText ? JSON.parse(responseText) : {};
-  } catch {
-    if (looksLikeHtml(responseText)) {
-      throw new Error(
-        "Could not reach the Cylindo app backend. Open the Cylindo app in Shopify Admin once, then try syncing again.",
-      );
-    }
-
-    throw new Error(`${fallbackError} (HTTP ${response.status}).`);
-  }
-
-  return json;
-}
-
-async function fetchAuthenticatedAppResponse(path) {
-  const normalizedPath = normalizeAppApiPath(path);
-  let response = await fetch(normalizedPath);
-  let responseText = await response.text();
-
-  if (!looksLikeHtml(responseText)) {
-    return { response, responseText };
-  }
-
-  const token = await shopify.auth.idToken();
-
-  if (!token) {
-    throw new Error("Could not authenticate with the app.");
-  }
-
-  const authenticatedUrl = new URL(`${APP_URL}/${normalizedPath}`);
-  authenticatedUrl.searchParams.set("id_token", token);
-
-  response = await fetch(authenticatedUrl.toString(), {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  responseText = await response.text();
-
-  return { response, responseText };
-}
-
-async function fetchAppJson(path, { onHeartbeat, requireOk = true } = {}) {
-  const startedAt = Date.now();
-  const heartbeat = onHeartbeat
-    ? setInterval(() => {
-        onHeartbeat(Math.floor((Date.now() - startedAt) / 1000));
-      }, 2000)
-    : null;
-
-  try {
-    const { response, responseText } = await fetchAuthenticatedAppResponse(path);
-    const json = await parseAppJsonResponse(
-      response,
-      responseText,
-      "Request failed",
-    );
-
-    if (!response.ok) {
-      throw new Error(json.error ?? `Request failed (${response.status}).`);
-    }
-
-    if (requireOk && json.ok === false) {
-      throw new Error(json.error ?? "Request failed.");
-    }
-
-    return json;
-  } finally {
-    if (heartbeat) {
-      clearInterval(heartbeat);
-    }
-  }
-}
 
 export default async () => {
   render(<Extension />, document.body);
@@ -158,10 +72,6 @@ function flushUi() {
   });
 }
 
-async function fetchSyncJson(path, onHeartbeat) {
-  return fetchAppJson(path, { onHeartbeat, requireOk: true });
-}
-
 function Extension() {
   const { i18n, close, data } = shopify;
   const productId = data.selected[0]?.id;
@@ -180,6 +90,7 @@ function Extension() {
   const [previewImageError, setPreviewImageError] = useState(false);
   const [productMetafields, setProductMetafields] = useState(null);
   const [firstPreviewVariant, setFirstPreviewVariant] = useState(null);
+  const [variantsBySku, setVariantsBySku] = useState({});
   const [showOverwriteWarning, setShowOverwriteWarning] = useState(false);
   const [progressMessage, setProgressMessage] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
@@ -239,6 +150,7 @@ function Extension() {
         const seen = new Set();
         const skus = [];
         const withImages = [];
+        const variantMap = {};
         let previewVariant = null;
 
         for (const variant of product.variants?.nodes ?? []) {
@@ -257,21 +169,31 @@ function Extension() {
           seen.add(key);
           skus.push(sku);
 
-          if (variant.image?.id || (variant.media?.nodes?.length ?? 0) > 0) {
+          const variantData = {
+            id: variant.id,
+            sku,
+            imageId: variant.image?.id ?? null,
+            mediaIds: (variant.media?.nodes ?? [])
+              .map((node) => node.id)
+              .filter(Boolean),
+            featuresCode: parseFeaturesCode(variant.metafield?.jsonValue),
+          };
+
+          variantMap[key] = variantData;
+
+          if (variant.image?.id || variantData.mediaIds.length > 0) {
             withImages.push(sku);
           }
 
           if (!previewVariant) {
-            previewVariant = {
-              sku,
-              featuresCode: parseFeaturesCode(variant.metafield?.jsonValue),
-            };
+            previewVariant = variantData;
           }
         }
 
         setProductTitle(product.title ?? "");
         setProductMetafields(metafields);
         setFirstPreviewVariant(previewVariant);
+        setVariantsBySku(variantMap);
         setSkuList(skus);
         setSkusWithImages(withImages);
       } catch (loadError) {
@@ -389,9 +311,15 @@ function Extension() {
     await flushUi();
 
     try {
+      const cylindoConfig = {
+        accountId: CYLINDO_ACCOUNT_ID,
+        size: CYLINDO_SIZE,
+      };
+
       for (let index = 0; index < skusToSync.length; index += 1) {
         const sku = skusToSync[index];
         const position = index + 1;
+        const variant = variantsBySku[sku.toLowerCase()];
 
         setProgressMessage(
           `Processing ${position} of ${skusToSync.length}: ${sku}`,
@@ -399,27 +327,30 @@ function Extension() {
         appendLogs([`Checking ${sku} (${position}/${skusToSync.length})...`]);
         await flushUi();
 
-        const params = new URLSearchParams({
-          productId,
-          skus: sku,
-          frame: String(frameNumber),
-        });
-
-        if (overwriteExisting) {
-          params.set("overwriteExisting", "1");
+        if (!variant) {
+          merged.failed.push({
+            productTitle,
+            sku,
+            variantId: "",
+            message: "Variant not found on this product",
+          });
+          appendLogs([`${sku}: Variant not found on this product.`]);
+          await flushUi();
+          continue;
         }
 
-        const json = await fetchSyncJson(
-          `api/sync-product?${params.toString()}`,
-          (elapsedSeconds) => {
-            setProgressMessage(
-              `Processing ${position} of ${skusToSync.length}: ${sku} (${elapsedSeconds}s)`,
-            );
-          },
-        );
+        const syncResult = await syncCylindoVariant({
+          productId,
+          productTitle,
+          productMetafields,
+          variant,
+          frame: frameNumber,
+          overwriteExisting,
+          cylindoConfig,
+        });
 
-        mergeSummary(merged, json.summary);
-        appendLogs(json.logs ?? [`Finished ${sku}.`]);
+        merged[syncResult.bucket].push(syncResult.entry);
+        appendLogs([`${sku}: ${syncResult.entry.message}`]);
         await flushUi();
       }
 
@@ -428,24 +359,6 @@ function Extension() {
       } else if (!overwriteExisting && overwriteCount > 0) {
         merged.statusMessage = `Skipped ${overwriteCount} variant SKU(s) with existing images.`;
       }
-
-      const historyParams = new URLSearchParams({
-        productId,
-        historyOnly: "1",
-        variantsRequested: String(skusToSync.length),
-        syncedCount: String(merged.synced.length),
-        skippedHasImageCount: String(merged.skippedHasImage.length),
-        skippedMissingMetafieldsCount: String(
-          merged.skippedMissingMetafields.length,
-        ),
-        failedCount: String(merged.failed.length),
-      });
-
-      if (merged.statusMessage) {
-        historyParams.set("statusMessage", merged.statusMessage);
-      }
-
-      await fetchSyncJson(`api/sync-product?${historyParams.toString()}`);
 
       appendLogs(["Sync complete."]);
       setProgressMessage("Sync complete.");
