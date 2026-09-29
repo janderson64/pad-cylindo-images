@@ -73,6 +73,23 @@ const DELETE_MEDIA_MUTATION = `#graphql
   }
 `;
 
+const PRODUCT_MEDIA_QUERY = `#graphql
+  query CylindoProductMedia($id: ID!) {
+    product(id: $id) {
+      media(first: 250) {
+        nodes {
+          id
+          ... on MediaImage {
+            image {
+              id
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 async function adminGraphql(query, variables) {
   const response = await fetch("shopify:admin/api/graphql.json", {
     method: "POST",
@@ -111,14 +128,32 @@ function variantHasExistingImage(variant) {
   );
 }
 
-function getReplaceableMediaIds(variant) {
-  const ids = [...(variant.mediaIds ?? [])];
+function getVariantMediaImageIds(variant) {
+  return (variant.mediaIds ?? []).filter((id) => id.includes("/MediaImage/"));
+}
 
-  if (variant.imageId && !ids.includes(variant.imageId)) {
-    ids.push(variant.imageId);
+async function resolveReplaceableMediaIds(productId, variant) {
+  const mediaImageIds = getVariantMediaImageIds(variant);
+
+  if (mediaImageIds.length > 0) {
+    return mediaImageIds;
   }
 
-  return ids;
+  const legacyImageId = variant.imageId;
+
+  if (!legacyImageId?.includes("/ProductImage/")) {
+    return [];
+  }
+
+  const json = await adminGraphql(PRODUCT_MEDIA_QUERY, { id: productId });
+  const nodes = json.data?.product?.media?.nodes ?? [];
+
+  return nodes
+    .filter(
+      (node) =>
+        node.id?.includes("/MediaImage/") && node.image?.id === legacyImageId,
+    )
+    .map((node) => node.id);
 }
 
 function mediaIdsForDetach(mediaIds) {
@@ -214,24 +249,24 @@ async function attachImageToVariant(
   existingMediaIds = [],
 ) {
   if (existingMediaIds.length > 0) {
-    const detachIds = mediaIdsForDetach(existingMediaIds);
+    const mediaImageIds = mediaIdsForDetach(existingMediaIds);
 
-    if (detachIds.length > 0) {
+    if (mediaImageIds.length > 0) {
       const detachError = await detachVariantMedia(
         productId,
         variantId,
-        detachIds,
+        mediaImageIds,
       );
 
       if (detachError) {
         return detachError;
       }
-    }
 
-    const deleteError = await deleteProductMedia(productId, existingMediaIds);
+      const deleteError = await deleteProductMedia(productId, mediaImageIds);
 
-    if (deleteError) {
-      return deleteError;
+      if (deleteError) {
+        return deleteError;
+      }
     }
   }
 
@@ -331,12 +366,16 @@ export async function syncCylindoVariant({
     };
   }
 
+  const existingMediaIds = overwriteExisting
+    ? await resolveReplaceableMediaIds(productId, variant)
+    : [];
+
   const shopifyError = await attachImageToVariant(
     productId,
     variant.id,
     urlResult.url,
     variant.sku ?? variant.id,
-    overwriteExisting ? getReplaceableMediaIds(variant) : [],
+    existingMediaIds,
   );
 
   if (shopifyError) {

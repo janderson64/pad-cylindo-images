@@ -113,14 +113,43 @@ function getVariantMediaIds(variant: VariantLookup): string[] {
   return (variant.media?.nodes ?? []).map((node) => node.id).filter(Boolean);
 }
 
-function getReplaceableMediaIds(variant: VariantLookup): string[] {
-  const ids = getVariantMediaIds(variant);
+function getVariantMediaImageIds(variant: VariantLookup): string[] {
+  return getVariantMediaIds(variant).filter((id) => id.includes("/MediaImage/"));
+}
 
-  if (variant.image?.id && !ids.includes(variant.image.id)) {
-    ids.push(variant.image.id);
+async function resolveReplaceableMediaIds(
+  admin: { graphql: AdminGraphql },
+  productId: string,
+  variant: VariantLookup,
+): Promise<string[]> {
+  const mediaImageIds = getVariantMediaImageIds(variant);
+
+  if (mediaImageIds.length > 0) {
+    return mediaImageIds;
   }
 
-  return ids;
+  const legacyImageId = variant.image?.id;
+
+  if (!legacyImageId?.includes("/ProductImage/")) {
+    return [];
+  }
+
+  const response = await admin.graphql(PRODUCT_MEDIA_QUERY, {
+    variables: { id: productId },
+  });
+  const json = await response.json();
+  const nodes =
+    (json.data?.product?.media?.nodes ?? []) as Array<{
+      id: string;
+      image?: { id: string } | null;
+    }>;
+
+  return nodes
+    .filter(
+      (node) =>
+        node.id.includes("/MediaImage/") && node.image?.id === legacyImageId,
+    )
+    .map((node) => node.id);
 }
 
 function mediaIdsForDetach(mediaIds: string[]): string[] {
@@ -282,6 +311,23 @@ const DELETE_MEDIA_MUTATION = `#graphql
   }
 `;
 
+const PRODUCT_MEDIA_QUERY = `#graphql
+  query CylindoProductMedia($id: ID!) {
+    product(id: $id) {
+      media(first: 250) {
+        nodes {
+          id
+          ... on MediaImage {
+            image {
+              id
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 function entry(
   productTitle: string,
   variant: { id: string; sku: string | null },
@@ -438,29 +484,29 @@ async function attachImageToVariant(
   existingMediaIds: string[] = [],
 ): Promise<string | null> {
   if (existingMediaIds.length > 0) {
-    const detachIds = mediaIdsForDetach(existingMediaIds);
+    const mediaImageIds = mediaIdsForDetach(existingMediaIds);
 
-    if (detachIds.length > 0) {
+    if (mediaImageIds.length > 0) {
       const detachError = await detachVariantMedia(
         admin,
         productId,
         variantId,
-        detachIds,
+        mediaImageIds,
       );
 
       if (detachError) {
         return detachError;
       }
-    }
 
-    const deleteError = await deleteProductMedia(
-      admin,
-      productId,
-      existingMediaIds,
-    );
+      const deleteError = await deleteProductMedia(
+        admin,
+        productId,
+        mediaImageIds,
+      );
 
-    if (deleteError) {
-      return deleteError;
+      if (deleteError) {
+        return deleteError;
+      }
     }
   }
   const createResponse = await admin.graphql(CREATE_MEDIA_MUTATION, {
@@ -745,13 +791,16 @@ async function syncVariant(
   }
 
   const alt = variant.sku ?? variant.id;
+  const existingMediaIds = options?.overwriteExisting
+    ? await resolveReplaceableMediaIds(admin, variant.product.id, variant)
+    : [];
   const shopifyError = await attachImageToVariant(
     admin,
     variant.product.id,
     variant.id,
     urlResult.url,
     alt,
-    options?.overwriteExisting ? getReplaceableMediaIds(variant) : [],
+    existingMediaIds,
   );
 
   if (shopifyError) {
