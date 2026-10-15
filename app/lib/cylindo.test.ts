@@ -79,4 +79,40 @@ if (jsonWrappedBuilt.ok) {
   assert.doesNotMatch(jsonWrappedBuilt.url, /%5B%22BACK%22%5D/);
 }
 
+const fourOptionProductMetafields = {
+  product_code: "FRMDSEC_3",
+  variant_option1_name: "BACK",
+  variant_option2_name: "FINISH",
+  variant_option3_name: "LEG",
+  variant_option4_name: "TRIM",
+};
+
+const fourFeaturesCode = ["BLISS_OATMEAL", "WOOD_CGRA", "METAL_CHROME", "TRIM_NATURAL"];
+
+const fourPairs = buildFeaturePairs(fourOptionProductMetafields, fourFeaturesCode);
+assert.deepEqual(fourPairs, [
+  { name: "BACK", code: "BLISS_OATMEAL" },
+  { name: "FINISH", code: "WOOD_CGRA" },
+  { name: "LEG", code: "METAL_CHROME" },
+  { name: "TRIM", code: "TRIM_NATURAL" },
+]);
+
+const fourBuilt = buildCylindoFrameUrlForVariant(
+  config,
+  fourOptionProductMetafields,
+  fourFeaturesCode,
+);
+assert.equal(fourBuilt.ok, true);
+
+if (fourBuilt.ok) {
+  assert.match(fourBuilt.url, /feature=TRIM%3ATRIM_NATURAL/);
+}
+
+const fourthOptionMissing = buildCylindoFrameUrlForVariant(
+  config,
+  productMetafields,
+  ["A", "B", "C", "D"],
+);
+assert.equal(fourthOptionMissing.ok, false);
+
 console.log("cylindo.test.ts passed");

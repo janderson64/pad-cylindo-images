@@ -13,6 +13,7 @@ const OPTION_NAME_KEYS = [
   "variant_option1_name",
   "variant_option2_name",
   "variant_option3_name",
+  "variant_option4_name",
 ] as const;
 
 export function parseProductMetafields(
